@@ -1,56 +1,69 @@
 import { GoogleGenAI } from '@google/genai';
-import { getConfig, loadResumeSchema, loadAllTargets } from './fs-store.js';
+import {
+  loadResumeSchema,
+  loadAllTargets,
+  getTarget,
+  getRecentQuestionTitles,
+  getQuestionTitlesForTarget,
+  getQuestionTitlesForTopic,
+} from './cloud-store.js';
+import yaml from 'js-yaml';
 
-/**
- * Initialize Gemini client
- */
+// ─── Client Init ────────────────────────────────────────────────────────────
+
 function getGeminiClient() {
-  const config = getConfig();
-  const apiKey = config.geminiApiKey || process.env.GEMINI_API_KEY;
-  
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('Gemini API Key is not configured. Please go to Settings to add your API key.');
+    throw new Error('Gemini API Key is not configured. Set the GEMINI_API_KEY environment variable.');
   }
-  
   return new GoogleGenAI({ apiKey });
 }
 
+// ─── Resume Context Helpers ─────────────────────────────────────────────────
+
 /**
- * Clean up YAML schema to avoid sending overly verbose metadata to the LLM.
- * This retains all relevant experience facts, skills, and education details
- * but strips out internal parser hints to save tokens.
+ * Parse the raw YAML string stored in Firestore into a structured resume object.
  */
-function getCleanResumeContext() {
-  const schema = loadResumeSchema();
+export function parseResumeYaml(rawYaml) {
+  if (!rawYaml) return null;
+  try {
+    return yaml.load(rawYaml);
+  } catch (e) {
+    console.error('Error parsing resume YAML:', e);
+    return null;
+  }
+}
+
+/**
+ * Build a clean, token-efficient resume context string from parsed schema.
+ */
+export function buildResumeContext(schema) {
   if (!schema) return 'No resume schema found.';
-  
-  // Format clean string representation of skills
+
   const skillsList = [];
   if (schema.skills) {
     for (const [key, val] of Object.entries(schema.skills)) {
-      skillsList.push(`${val.canonical || key} (Proficiency: ${val.proficiency || 'proficient'})`);
+      skillsList.push(`${val.canonical || key} (${val.proficiency || 'proficient'})`);
     }
   }
-  
-  // Format clean experience facts
+
   const experienceList = [];
   if (schema.experience) {
     for (const job of schema.experience) {
       const facts = (job.facts || []).map(f => {
-        return `- [Fact ID: ${f.id}] ${f.action}\n  Outcomes: ${(f.outcomes || []).map(o => o.text).join(', ')}\n  Tech Stack: ${(f.tech || []).join(', ')}`;
+        return `- [${f.id}] ${f.action}\n  Outcomes: ${(f.outcomes || []).map(o => o.text).join(', ')}\n  Tech: ${(f.tech || []).join(', ')}`;
       }).join('\n');
-      
+
       experienceList.push(`
 Company: ${job.company}
 Role: ${job.role_title}
 Dates: ${job.dates}
-Key Achievements / Facts:
+Facts:
 ${facts}
       `);
     }
   }
 
-  // Format clean education details
   const educationList = [];
   if (schema.education) {
     for (const edu of schema.education) {
@@ -68,175 +81,449 @@ ${skillsList.map(s => `- ${s}`).join('\n')}
 
 PROFESSIONAL EXPERIENCE:
 ${experienceList.join('\n')}
-  `;
+  `.trim();
 }
 
 /**
- * Clean up all target role and job description documents to reference.
+ * Extract all individual facts from the resume schema, each with its parent job context.
  */
-function getCleanTargetsContext() {
-  const targets = loadAllTargets();
-  if (targets.length === 0) return '';
-  
-  return targets.map((t, idx) => `
-TARGET ROLE #${idx + 1}: ${t.title}
-Filename: ${t.filename}
----
-${t.content}
-  `).join('\n\n');
+export function extractFacts(schema) {
+  if (!schema?.experience) return [];
+
+  const facts = [];
+  for (const job of schema.experience) {
+    for (const fact of (job.facts || [])) {
+      facts.push({
+        factId: fact.id,
+        action: fact.action,
+        outcomes: (fact.outcomes || []).map(o => o.text),
+        tech: fact.tech || [],
+        themes: fact.themes || [],
+        company: job.company,
+        role: job.role_title,
+        dates: job.dates,
+        baseThemes: job.base_themes || [],
+      });
+    }
+  }
+  return facts;
 }
 
 /**
- * Helper to call Gemini and parse JSON response
+ * Group skills into clusters for question generation.
  */
-async function callGeminiJson(systemPrompt, prompt) {
+export function extractSkillClusters(schema) {
+  if (!schema?.skills) return [];
+
+  const categoryMap = {};
+  for (const [key, val] of Object.entries(schema.skills)) {
+    const categories = val.categories || ['general'];
+    const primary = categories[0];
+    if (!categoryMap[primary]) {
+      categoryMap[primary] = [];
+    }
+    categoryMap[primary].push({
+      key,
+      canonical: val.canonical || key,
+      proficiency: val.proficiency || 'familiar',
+      categories,
+    });
+  }
+
+  return Object.entries(categoryMap).map(([category, skills]) => ({
+    category,
+    skills,
+  }));
+}
+
+// ─── Resume Ingestion — Chunked Generation ──────────────────────────────────
+
+/**
+ * Generate questions for a single resume fact.
+ * Returns 4-5 questions anchored to this specific fact.
+ */
+export async function generateQuestionsForFact(fact, fullResumeContext) {
   const ai = getGeminiClient();
+
+  const prompt = `
+You are a senior interviewer creating interview questions anchored to ONE specific achievement from a candidate's resume.
+
+CANDIDATE CONTEXT (for background, but focus on the TARGET FACT below):
+${fullResumeContext}
+
+TARGET FACT to generate questions about:
+Company: ${fact.company} (${fact.role})
+Achievement: ${fact.action}
+Outcomes: ${fact.outcomes.join('; ')}
+Technologies: ${fact.tech.join(', ')}
+Themes: ${fact.themes.join(', ')}
+
+Generate exactly 4 to 5 interview questions about THIS fact. Requirements:
+- Include at least one from each: system-design or conceptual-engineering, and behavioral
+- At least one "easy" warm-up, at least one "hard" deep-dive
+- Ask about trade-offs, failure modes, alternatives considered, scaling limits, design decisions
+- For behavioral: challenge stated outcomes — how measured, who pushed back, what failed
+- DO NOT ask for code or pseudocode
+
+Return ONLY a JSON array. Each object:
+{
+  "title": "short specific title (≤ 12 words)",
+  "question": "full question text anchored to this fact",
+  "category": "system-design" | "conceptual-engineering" | "behavioral",
+  "subCategories": ["tag1", "tag2"],
+  "difficulty": "easy" | "medium" | "hard",
+  "resumeContext": "1-2 sentences naming the specific fact and why this question matters"
+}
+  `.trim();
+
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: systemPrompt + '\n\n' + prompt,
-    config: {
-      responseMimeType: 'application/json'
-    }
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
   });
-  
-  const rawJson = response.text;
-  try {
-    return JSON.parse(rawJson);
-  } catch (error) {
-    console.error('Failed to parse generated questions JSON. Raw response:', rawJson);
-    throw new Error('LLM did not return valid JSON. Please try again.');
-  }
+
+  return safeParseJsonArray(response.text);
 }
 
 /**
- * Generate N questions focused strictly on general resume profile.
+ * Generate conceptual questions for a skill cluster.
+ * Returns 2-3 questions about the skills in this cluster.
  */
-async function generateResumeOnlyQuestions(resumeText, count) {
-  if (count <= 0) return [];
-  
-  const systemPrompt = `
-You are a senior software engineering interviewer preparing a set of short daily interview questions for a candidate. Focus strictly on their resume experiences, past projects, and core technical skills.
+export async function generateQuestionsForSkillCluster(cluster, fullResumeContext) {
+  const ai = getGeminiClient();
 
-# Output schema
-Return ONLY a JSON array of exactly ${count} question objects. Each object must have these fields:
-- "title": short, specific question title (≤ 12 words). Avoid generic titles.
-- "question": the full question text. Anchor it to a specific fact, project, technology, or claim from the candidate's profile.
-  * For "conceptual-engineering" questions (especially Easy/Medium): Focus on direct technical fundamentals, low-level mechanics, data structures, or runtime behavior of their technologies (e.g. JVM memory, Go channels, Java HashMap collision resolution, cache-locality, DB indexes). Structure these questions progressively using 1-2 concise bulleted follow-ups (e.g. "What is [X]?\n- How does it handle [Y]?\n- Which approach is better for [Z] and why?"). Keep them direct, concise, and realistic.
-  * For "system-design" / "behavioral": Ask for architectural trade-offs, scaling limits, data consistency, or defense of choices as usual. Do not ask for code.
-- "category": one of "system-design", "conceptual-engineering", "behavioral".
-- "subCategories": 2–5 lowercase tags for the topics involved (e.g. ["postgres", "indexing", "scaling"]).
-- "difficulty": one of "easy", "medium", "hard".
-- "resumeContext": 1–2 sentences naming the specific resume fact, project, or skill that motivated this question.
+  const skillNames = cluster.skills.map(s => s.canonical).join(', ');
 
-# Difficulty distribution constraints
-- If generating 1 question: Make it "easy" or "medium".
-- If generating 2 questions: Make one "easy" warm-up focused on low-level mechanics, and one "medium" probing trade-offs or internals.
-- If generating 3 or more questions: Include at least one "easy" warm-up, at least one "medium" question, and the remainder "hard".
-NEVER return a deck where every question is "hard".
+  const prompt = `
+You are a senior interviewer creating conceptual engineering questions about a SKILL CLUSTER from a candidate's stack.
 
-# Variety rules
-- Spread across categories: include at least two of {system-design, conceptual-engineering, behavioral} if generating multiple questions.
-- Spread across the resume: do not center two questions on the same project, company, or fact. Rotate through the candidate's experience.
+CANDIDATE CONTEXT:
+${fullResumeContext}
 
-# Quality bar
-- Every question must be anchored to something concrete in the profile (a project, a named technology, an outcome, a degree focus). Vague prompts like "tell me about a time you led a team" are not acceptable.
-- For system-design questions: ask about decisions, trade-offs, scaling limits, data consistency, security, failure modes. Do not ask the candidate to write code.
-- For conceptual-engineering questions: focus on the inner workings, algorithmic trade-offs, data structures, or performance implications (like cache efficiency or memory locality) of languages and tools in their stack. Make them direct, concise, and progressive with bulleted follow-up queries.
-- For behavioral questions: challenge a stated outcome. Ask how it was measured, what was rejected, who pushed back, what failed first.
+SKILL CLUSTER: ${cluster.category}
+Skills in cluster: ${skillNames}
 
-# Constraints
-- Do NOT reference target roles or any specific job descriptions. Focus purely on general resume facts and tech stack.
+Generate exactly 3 conceptual or system-design questions that test deep understanding of these technologies.
+- Focus on trade-offs between tools in this cluster, when to use what, architectural implications
+- At least one should be "easy" (explain a core concept), one "medium" or "hard" (design decision or trade-off)
+- Anchor to the candidate's real usage where possible
 
-# Candidate profile
-${resumeText}
+Return ONLY a JSON array. Each object:
+{
+  "title": "short specific title (≤ 12 words)",
+  "question": "full question text",
+  "category": "conceptual-engineering" | "system-design",
+  "subCategories": ["tag1", "tag2"],
+  "difficulty": "easy" | "medium" | "hard",
+  "resumeContext": "1-2 sentences connecting to candidate's experience with these skills"
+}
   `.trim();
 
-  const prompt = `Generate exactly ${count} distinct interview questions. Return JSON only.`;
-  return await callGeminiJson(systemPrompt, prompt);
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
+  });
+
+  return safeParseJsonArray(response.text);
 }
 
 /**
- * Generate N questions tailored strictly to a specific target role.
+ * Generate cross-cutting behavioral questions across all experience.
  */
-async function generateTargetAlignedQuestions(resumeText, target, count) {
-  if (count <= 0 || !target) return [];
-  
-  const systemPrompt = `
-You are a senior software engineering interviewer preparing tailored interview questions for a candidate. Focus strictly on the intersection of the candidate's resume and the specific target role described below.
+export async function generateBehavioralQuestions(fullResumeContext) {
+  const ai = getGeminiClient();
 
-# Target Role to Align With
-Title: ${target.title}
-Role Description:
+  const prompt = `
+You are a senior interviewer creating behavioral interview questions that cut across a candidate's FULL career history.
+
+CANDIDATE CONTEXT:
+${fullResumeContext}
+
+Generate exactly 20 behavioral interview questions. Requirements:
+- Cover themes: leadership, conflict resolution, failure/recovery, prioritization, mentoring, cross-team collaboration, technical debt decisions, stakeholder management, time pressure
+- EACH question must reference a SPECIFIC company, role, or project from the candidate's experience — no generic "tell me about a time" without context
+- Mix difficulties: 5 easy, 10 medium, 5 hard
+- Challenge stated outcomes: ask how things were measured, what alternatives were rejected, what went wrong first
+- Spread across different companies/roles — don't cluster on one employer
+
+Return ONLY a JSON array. Each object:
+{
+  "title": "short specific title (≤ 12 words)",
+  "question": "full question text tied to specific experience",
+  "category": "behavioral",
+  "subCategories": ["tag1", "tag2"],
+  "difficulty": "easy" | "medium" | "hard",
+  "resumeContext": "1-2 sentences naming the specific role/project referenced"
+}
+  `.trim();
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
+  });
+
+  return safeParseJsonArray(response.text);
+}
+
+/**
+ * Generate system design combination questions that combine multiple facts/skills.
+ */
+export async function generateSystemDesignQuestions(fullResumeContext) {
+  const ai = getGeminiClient();
+
+  const prompt = `
+You are a senior interviewer creating system design questions that combine MULTIPLE aspects of a candidate's experience.
+
+CANDIDATE CONTEXT:
+${fullResumeContext}
+
+Generate exactly 15 system design questions. Requirements:
+- Each question should combine knowledge from at least 2 different projects or skill areas
+- Ask about designing systems at scale, making architectural decisions, handling failure modes
+- Include data modeling, API design, caching, consistency, observability themes
+- Mix difficulties: 3 easy, 7 medium, 5 hard
+- Don't ask for code — ask for architecture, component design, trade-offs
+
+Return ONLY a JSON array. Each object:
+{
+  "title": "short specific title (≤ 12 words)",
+  "question": "full question text combining multiple experience areas",
+  "category": "system-design",
+  "subCategories": ["tag1", "tag2"],
+  "difficulty": "easy" | "medium" | "hard",
+  "resumeContext": "1-2 sentences naming the specific facts/projects combined"
+}
+  `.trim();
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
+  });
+
+  return safeParseJsonArray(response.text);
+}
+
+/**
+ * Run the full resume ingestion pipeline.
+ * Generates ~150 questions across all facts, skill clusters, behavioral, and system design.
+ * Returns all generated questions (not yet saved — caller handles saving).
+ *
+ * @param {string} rawYaml - The raw schema.yaml content
+ * @param {function} onProgress - Optional callback: (step, total, message) => void
+ * @returns {Array} Array of question objects ready for batch creation
+ */
+export async function runResumeIngestion(rawYaml, onProgress = null) {
+  const schema = parseResumeYaml(rawYaml);
+  if (!schema) throw new Error('Failed to parse resume schema.');
+
+  const resumeContext = buildResumeContext(schema);
+  const facts = extractFacts(schema);
+  const skillClusters = extractSkillClusters(schema);
+
+  const allQuestions = [];
+  const totalSteps = facts.length + skillClusters.length + 2; // +2 for behavioral and system design
+  let currentStep = 0;
+
+  // 1. Generate questions per fact (parallel in batches of 5)
+  for (let i = 0; i < facts.length; i += 5) {
+    const batch = facts.slice(i, i + 5);
+    const results = await Promise.all(
+      batch.map(fact => generateQuestionsForFact(fact, resumeContext).catch(err => {
+        console.error(`Error generating for fact ${fact.factId}:`, err);
+        return [];
+      }))
+    );
+    for (const questions of results) {
+      allQuestions.push(...questions.map(q => ({ ...q, source: 'resume-ingestion' })));
+    }
+    currentStep += batch.length;
+    if (onProgress) onProgress(currentStep, totalSteps, `Generated questions for ${currentStep}/${facts.length} experience facts...`);
+  }
+
+  // 2. Generate questions per skill cluster (parallel in batches of 5)
+  for (let i = 0; i < skillClusters.length; i += 5) {
+    const batch = skillClusters.slice(i, i + 5);
+    const results = await Promise.all(
+      batch.map(cluster => generateQuestionsForSkillCluster(cluster, resumeContext).catch(err => {
+        console.error(`Error generating for cluster ${cluster.category}:`, err);
+        return [];
+      }))
+    );
+    for (const questions of results) {
+      allQuestions.push(...questions.map(q => ({ ...q, source: 'resume-ingestion' })));
+    }
+    currentStep += batch.length;
+    if (onProgress) onProgress(currentStep, totalSteps, `Generated questions for ${currentStep - facts.length}/${skillClusters.length} skill clusters...`);
+  }
+
+  // 3. Generate cross-cutting behavioral questions
+  try {
+    const behavioral = await generateBehavioralQuestions(resumeContext);
+    allQuestions.push(...behavioral.map(q => ({ ...q, source: 'resume-ingestion' })));
+  } catch (err) {
+    console.error('Error generating behavioral questions:', err);
+  }
+  currentStep++;
+  if (onProgress) onProgress(currentStep, totalSteps, 'Generated behavioral questions...');
+
+  // 4. Generate system design combination questions
+  try {
+    const sysDesign = await generateSystemDesignQuestions(resumeContext);
+    allQuestions.push(...sysDesign.map(q => ({ ...q, source: 'resume-ingestion' })));
+  } catch (err) {
+    console.error('Error generating system design questions:', err);
+  }
+  currentStep++;
+  if (onProgress) onProgress(currentStep, totalSteps, 'Generated system design questions. Complete!');
+
+  return allQuestions;
+}
+
+// ─── Target Ingestion ───────────────────────────────────────────────────────
+
+/**
+ * Generate interview questions for a target role, cross-referenced with resume.
+ */
+export async function generateTargetQuestions(target, rawYaml, existingTitles = []) {
+  const ai = getGeminiClient();
+  const schema = parseResumeYaml(rawYaml);
+  const resumeContext = schema ? buildResumeContext(schema) : 'No resume available.';
+
+  const dedupBlock = existingTitles.length > 0
+    ? `\nDO NOT generate questions similar to these existing ones:\n${existingTitles.map(t => `- "${t}"`).join('\n')}\n`
+    : '';
+
+  const prompt = `
+You are a senior interviewer preparing targeted interview questions for a specific company and role.
+
+CANDIDATE CONTEXT:
+${resumeContext}
+
+TARGET ROLE:
+Company: ${target.company || target.title}
+Role: ${target.role || ''}
+Job Description / Details:
 ${target.content}
 
-# Output schema
-Return ONLY a JSON array of exactly ${count} question objects. Each object must have these fields:
-- "title": short, specific question title (≤ 12 words). Avoid generic titles.
-- "question": the full question text. Anchor it to a specific project, claim, or technology from their profile, but frame the scenario or architectural trade-offs around the requirements of the target role above. Do not ask for code.
-- "category": one of "system-design", "conceptual-engineering", "behavioral".
-- "subCategories": 2–5 lowercase tags for the topics involved (e.g. ["postgres", "indexing", "scaling"]).
-- "difficulty": one of "easy", "medium", "hard".
-- "resumeContext": 1–2 sentences. Must start with the prefix "Tailored for ${target.title}: " followed by the specific resume fact and why it aligns with the target role.
+${dedupBlock}
 
-# Constraints
-- Every question must be directly related to the target role.
-- Focus on the intersection: find facts in the candidate's profile that are relevant to the target role requirements and design a targeted scenario.
+Generate 25 to 35 interview questions that a candidate would realistically face for this specific role at this company. Requirements:
+- Use your knowledge of ${target.company}'s interview process, engineering culture, and technical stack
+- Mix categories: ~10 system-design, ~15 conceptual-engineering, ~10 behavioral
+- Mix difficulties: ~8 easy, ~15 medium, ~12 hard
+- Anchor questions to the intersection of the candidate's experience and the target role
+- For technical questions: focus on the tech stack mentioned in the JD
+- For behavioral: align with the company's known cultural values and leadership principles
+- Ask about trade-offs, design decisions, failure modes, scaling — NOT pseudocode
 
-# Candidate profile
-${resumeText}
+Return ONLY a JSON array. Each object:
+{
+  "title": "short specific title (≤ 12 words)",
+  "question": "full question text",
+  "category": "system-design" | "conceptual-engineering" | "behavioral",
+  "subCategories": ["tag1", "tag2"],
+  "difficulty": "easy" | "medium" | "hard",
+  "resumeContext": "1-2 sentences on how this connects to the candidate's experience and the target role"
+}
   `.trim();
 
-  const prompt = `Generate exactly ${count} target-aligned interview questions. Return JSON only.`;
-  return await callGeminiJson(systemPrompt, prompt);
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
+  });
+
+  const questions = safeParseJsonArray(response.text);
+  return questions.map(q => ({
+    ...q,
+    source: 'target-ingestion',
+    sourceTargetId: target.id || null,
+  }));
 }
 
+// ─── Topic-Based Generation ─────────────────────────────────────────────────
+
 /**
- * Generate 3-5 daily interview questions tailored to the candidate's skills and goals.
+ * Generate questions for a user-specified topic with optional context sources.
  */
-export async function generateDailyQuestions() {
-  const resumeText = getCleanResumeContext();
-  const allTargets = loadAllTargets();
-  
-  let questionsList = [];
-  
-  if (allTargets.length === 0) {
-    // Generate 3–4 general resume-only questions
-    questionsList = await generateResumeOnlyQuestions(resumeText, 3);
-  } else {
-    // Determine the mix programmatically: 2 resume-only, 1 target-aligned
-    const resumeCount = 2;
-    const targetCount = 1;
-    
-    // Pick 1 random target role from the list
-    const randomTargetIndex = Math.floor(Math.random() * allTargets.length);
-    const selectedTarget = allTargets[randomTargetIndex];
-    
-    // Generate questions using both helpers
-    const resumeQuestions = await generateResumeOnlyQuestions(resumeText, resumeCount);
-    const targetQuestions = await generateTargetAlignedQuestions(resumeText, selectedTarget, targetCount);
-    
-    questionsList = [...resumeQuestions, ...targetQuestions];
+export async function generateTopicQuestions(topic, contextSources = {}, rawYaml = null) {
+  const ai = getGeminiClient();
+
+  let contextBlock = '';
+
+  // Add resume context if requested
+  if (contextSources.useResume && rawYaml) {
+    const schema = parseResumeYaml(rawYaml);
+    const resumeContext = schema ? buildResumeContext(schema) : '';
+    if (resumeContext) {
+      contextBlock += `\nCANDIDATE RESUME CONTEXT:\n${resumeContext}\n`;
+    }
   }
-  
-  // Shuffle list so target-aligned and general questions are mixed
-  return questionsList.sort(() => Math.random() - 0.5);
+
+  // Add target context if requested
+  if (contextSources.targetContent) {
+    contextBlock += `\nTARGET ROLE CONTEXT:\nCompany: ${contextSources.targetCompany || 'Unknown'}\nRole: ${contextSources.targetRole || ''}\nDetails:\n${contextSources.targetContent}\n`;
+  }
+
+  // Dedup block
+  const existingTitles = await getQuestionTitlesForTopic(topic);
+  const dedupBlock = existingTitles.length > 0
+    ? `\nDO NOT generate questions similar to these existing ones on this topic:\n${existingTitles.map(t => `- "${t}"`).join('\n')}\n`
+    : '';
+
+  const prompt = `
+You are a senior interviewer creating a deep-dive question set on a specific technical topic.
+
+TOPIC: ${topic}
+${contextBlock}
+${dedupBlock}
+
+Generate exactly 8 interview questions focused on "${topic}". Requirements:
+- Deep technical coverage of ${topic}: fundamentals, trade-offs, design patterns, failure modes, real-world applications
+- Mix categories: at least 2 system-design, at least 3 conceptual-engineering, at least 1 behavioral
+- Mix difficulties: 2 easy, 3 medium, 3 hard
+- If candidate context is provided, anchor questions to their real experience where natural
+- Ask about trade-offs, edge cases, alternatives, scaling limits — NOT pseudocode
+
+Return ONLY a JSON array. Each object:
+{
+  "title": "short specific title (≤ 12 words)",
+  "question": "full question text",
+  "category": "system-design" | "conceptual-engineering" | "behavioral",
+  "subCategories": ["tag1", "tag2"],
+  "difficulty": "easy" | "medium" | "hard",
+  "resumeContext": "1-2 sentences explaining why this question matters for the topic"
 }
+  `.trim();
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
+  });
+
+  const questions = safeParseJsonArray(response.text);
+  return questions.map(q => ({
+    ...q,
+    source: 'topic-generated',
+    sourceTopic: topic.toLowerCase(),
+  }));
+}
+
+// ─── Answer Evaluation ──────────────────────────────────────────────────────
 
 /**
  * Grade and evaluate the candidate's long-form answer.
+ * Unchanged from original — this works well as-is.
  */
 export async function evaluateAnswer(questionTitle, questionText, resumeContext, userAnswer) {
   const ai = getGeminiClient();
-  
-  const prompt = `
-You are a senior interviewer evaluating a candidate's answer. Grade rigorously but fairly, calibrated to the apparent difficulty and type of the question — not every question deserves FAANG-tier expectations.
 
-### EVALUATION CALIBRATION FOR CONCISENESS
-If the question is a direct technical conceptual question focusing on low-level mechanics or data structures (e.g. Java HashMap internals, Go channels, DB index structures), **DO NOT** penalize the candidate for omitting out-of-scope architectural concepts (such as security, multi-region scaling, load balancing, or network configurations) unless the question explicitly asked for them.
-Instead:
-- Reward answers that are highly precise, direct, and concise (high signal-to-noise ratio).
-- Focus feedback on the specific technical details asked in the prompt.
-- Calibrate the score based on their depth of understanding of the direct question.
+  const prompt = `
+You are a senior interviewer evaluating a candidate's long-form answer. Grade rigorously but fairly, calibrated to the apparent difficulty of the question — not every question deserves FAANG-tier expectations.
 
 ### QUESTION
 Title: ${questionTitle}
@@ -251,7 +538,7 @@ Return clean Markdown with these sections in order. If no answer was submitted, 
 
 1. **Score**: An overall score in the form "XX/100" and a one-sentence verdict.
 2. **Strengths**: Concrete things the candidate did well — specific claims they defended, trade-offs they raised, structure they used. Cite their wording where it helps.
-3. **Gaps & Missed Trade-offs**: Specific omissions or incorrect assumptions. Focus on low-level details (e.g., memory locality, cache misses, complexity, edge-cases) for conceptual engineering questions, and system/behavioral omissions for design/behavioral questions. Avoid generic advice; tie each gap directly to this question.
+3. **Gaps & Missed Trade-offs**: Specific omissions — edge cases, scaling limits, security, data consistency, alternatives, failure modes. Avoid generic advice; tie each gap to this question.
 4. **Ideal Answer Outline**: Bullet rubric of what a strong answer covers for THIS specific question. Tailored, not boilerplate.
 5. **SM-2 Rating Recommendation**: Recommend a score from 0 to 5 for spaced repetition:
    - **5** — Thorough, well-structured, key trade-offs covered.
@@ -272,16 +559,15 @@ At the very end of your response, output ONLY this JSON block (do not include an
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: prompt
+    contents: prompt,
   });
   const fullText = response.text;
-  
+
   // Extract the JSON block at the bottom
   const jsonRegex = /```json\r?\n([\s\S]*?)\r?\n```/g;
-  let recommendedRating = 3; // Default
+  let recommendedRating = 3;
   let match;
-  
-  // Find the last JSON block in the text
+
   while ((match = jsonRegex.exec(fullText)) !== null) {
     try {
       const data = JSON.parse(match[1]);
@@ -289,16 +575,121 @@ At the very end of your response, output ONLY this JSON block (do not include an
         recommendedRating = data.recommended_rating;
       }
     } catch (e) {
-      // Ignore parse error, keep searching or fallback to default
+      // Ignore, keep searching or fallback
     }
   }
 
-  // Clean up the JSON block from the user-facing markdown feedback if desired,
-  // or leave it as it is a nice structured ending. We'll strip it for clean note reading
   const cleanMarkdown = fullText.replace(/```json\r?\n[\s\S]*?\r?\n```/g, '').trim();
 
   return {
     evaluationMarkdown: cleanMarkdown,
-    recommendedRating
+    recommendedRating,
   };
+}
+
+// ─── Utilities ──────────────────────────────────────────────────────────────
+
+/**
+ * Try to repair a truncated JSON string by closing unclosed brackets and quotes.
+ * Extremely robust for partial LLM responses.
+ */
+function repairTruncatedJson(str) {
+  if (!str) return '';
+
+  let insideString = false;
+  let isEscaped = false;
+  const stack = [];
+
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      isEscaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      insideString = !insideString;
+      continue;
+    }
+
+    if (!insideString) {
+      if (char === '{' || char === '[') {
+        stack.push(char);
+      } else if (char === '}') {
+        if (stack[stack.length - 1] === '{') {
+          stack.pop();
+        }
+      } else if (char === ']') {
+        if (stack[stack.length - 1] === '[') {
+          stack.pop();
+        }
+      }
+    }
+  }
+
+  let repaired = str;
+
+  // 1. Close unclosed string
+  if (insideString) {
+    repaired += '"';
+  }
+
+  // 2. Remove trailing comma or partial field if needed
+  repaired = repaired.trim();
+  if (repaired.endsWith(',')) {
+    repaired = repaired.slice(0, -1).trim();
+  }
+
+  // 3. Close open brackets/objects
+  while (stack.length > 0) {
+    const open = stack.pop();
+    if (open === '{') {
+      repaired += '}';
+    } else if (open === '[') {
+      repaired += ']';
+    }
+  }
+
+  return repaired;
+}
+
+/**
+ * Safely parse a JSON array from LLM response text.
+ * Handles cases where the LLM wraps the JSON in markdown code blocks and repairs truncated JSON.
+ */
+function safeParseJsonArray(text) {
+  if (!text) return [];
+
+  // Try direct parse
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    // Try extracting from markdown code block first
+    const codeBlockMatch = text.match(/```(?:json)?\r?\n([\s\S]*?)\r?\n```/);
+    let targetText = codeBlockMatch ? codeBlockMatch[1] : text;
+
+    try {
+      const parsed = JSON.parse(targetText);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e2) {
+      // Attempt repair on truncated JSON
+      try {
+        console.warn('Attempting JSON repair on truncated LLM response...');
+        const repaired = repairTruncatedJson(targetText);
+        const parsed = JSON.parse(repaired);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e3) {
+        console.error('Failed to parse and repair LLM JSON response:', e3);
+        console.error('Original truncated text:', text.slice(0, 300));
+      }
+    }
+    return [];
+  }
 }

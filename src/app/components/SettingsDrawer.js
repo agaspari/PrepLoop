@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, Check, XCircle, Loader2, Folder, Key, Send, Shield, LogOut, Info } from "lucide-react";
-import { getConfigAction } from "../actions";
+import { X, Check, XCircle, Loader2, Key, Shield, LogOut, Info, Database, BarChart3 } from "lucide-react";
+import { getConfigAction, clearSessionAction } from "../actions";
 
 export default function SettingsDrawer({ isOpen, onClose }) {
   const [config, setConfig] = useState(null);
@@ -23,32 +23,38 @@ export default function SettingsDrawer({ isOpen, onClose }) {
     }
   }
 
-  function handleLogout() {
-    window.location.href = "/api/auth/logout";
+  async function handleLogout() {
+    await clearSessionAction();
+    window.location.href = "/login";
   }
 
   if (!isOpen) return null;
 
+  const sourceLabels = {
+    "resume-ingestion": "Resume",
+    "target-ingestion": "Target Roles",
+    "topic-generated": "Topics",
+    "custom": "Custom",
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      {/* Backdrop */}
       <div 
         className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
 
-      {/* Panel */}
       <div className="relative z-10 w-full max-w-md h-full glass shadow-2xl flex flex-col border-l border-white/10 animate-in slide-in-from-right duration-300">
         
         {/* Header */}
         <div className="p-6 border-b border-white/10 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white tracking-tight">System Status</h2>
-            <p className="text-xs text-zinc-400 mt-1">Read-only configuration overview</p>
+            <p className="text-xs text-zinc-400 mt-1">Configuration & question bank stats</p>
           </div>
           <button 
             onClick={onClose}
-            className="p-2 text-zinc-400 hover:text-white rounded-full hover:bg-white/5 transition-colors"
+            className="p-2 text-zinc-400 hover:text-white rounded-full hover:bg-white/5 transition-colors cursor-pointer"
           >
             <X size={20} />
           </button>
@@ -68,10 +74,28 @@ export default function SettingsDrawer({ isOpen, onClose }) {
               <div className="p-4 rounded-xl bg-indigo-950/20 border border-indigo-500/20 text-indigo-300 text-xs flex items-start gap-2.5">
                 <Info size={14} className="shrink-0 mt-0.5 text-indigo-400" />
                 <span className="leading-relaxed">
-                  All configuration is managed through environment variables. 
-                  Update your <code className="text-indigo-300 bg-indigo-500/15 px-1 py-0.5 rounded text-[10px]">.env</code> file 
-                  or platform settings to change these values.
+                  Configuration is managed through environment variables. 
+                  Data is stored in Firebase Firestore.
                 </span>
+              </div>
+
+              {/* Question Bank Stats */}
+              <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
+                <div className="flex items-center gap-2 mb-3">
+                  <BarChart3 size={16} className="text-purple-400" />
+                  <span className="text-sm font-semibold text-zinc-300">Question Bank</span>
+                  <span className="text-lg font-black font-mono text-white ml-auto">{config.totalQuestions || 0}</span>
+                </div>
+                {config.questionsBySource && Object.keys(config.questionsBySource).length > 0 && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(config.questionsBySource).map(([source, count]) => (
+                      <div key={source} className="flex items-center justify-between px-3 py-1.5 bg-white/5 rounded-lg">
+                        <span className="text-[10px] text-zinc-400">{sourceLabels[source] || source}</span>
+                        <span className="text-xs font-bold font-mono text-zinc-300">{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Status Items */}
@@ -84,31 +108,20 @@ export default function SettingsDrawer({ isOpen, onClose }) {
               />
 
               <StatusItem
-                icon={<Send size={16} />}
-                label="Webhook Notifications"
-                isActive={config.hasWebhook}
-                activeText="Configured"
-                inactiveText="Not configured — set WEBHOOK_URL (optional)"
+                icon={<Database size={16} />}
+                label="Firebase Firestore"
+                isActive={true}
+                activeText="Connected"
+                inactiveText="Not configured"
               />
 
               <StatusItem
                 icon={<Shield size={16} />}
-                label="Cron Secret"
-                isActive={config.hasCronSecret}
-                activeText="Custom secret configured"
-                inactiveText="Using default — set CRON_SECRET for production"
+                label="Authentication"
+                isActive={true}
+                activeText="Firebase Auth (Google)"
+                inactiveText="Not configured"
               />
-
-              {/* Vault Path */}
-              <div className="p-4 rounded-xl bg-white/[0.03] border border-white/5">
-                <div className="flex items-center gap-2 mb-2">
-                  <Folder size={16} className="text-purple-400" />
-                  <span className="text-sm font-semibold text-zinc-300">Vault Path</span>
-                </div>
-                <code className="text-xs text-zinc-400 font-mono break-all">
-                  {config.vaultPath || "Not configured"}
-                </code>
-              </div>
 
             </div>
           )}

@@ -1,47 +1,120 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { adminAuth } from "../lib/firebase-admin.js";
 import {
-  getConfig,
   loadAllQuestions,
-  createNewQuestion,
+  getQuestion,
+  createQuestion,
+  createQuestionsBatch,
   saveAnswerAndEvaluation,
+  updateQuestionSRS,
+  deleteQuestion,
   loadAllTargets,
-  saveTargetFile,
-  deleteTargetFile,
-  loadResumeSchemaRaw
-} from "../lib/fs-store.js";
-import { generateDailyQuestions, evaluateAnswer } from "../lib/llm.js";
+  getTarget,
+  saveTarget,
+  deleteTarget,
+  updateTargetQuestionCount,
+  loadResumeSchema,
+  saveResumeSchema,
+  setGenerationStatus,
+  getGenerationStatus,
+  getStats,
+  getRecentQuestionTitles,
+  getQuestionTitlesForTarget,
+  addGeneratedTopic,
+  activateDailyQuestions,
+} from "../lib/cloud-store.js";
+import {
+  runResumeIngestion,
+  generateTargetQuestions,
+  generateTopicQuestions,
+  evaluateAnswer,
+} from "../lib/llm.js";
 import { calculateSM2 } from "../lib/srs.js";
 
-/**
- * Helper to safely extract the question text from the note body
- */
-function extractQuestionText(question) {
-  const body = question.body || "";
-  const qIndex = body.indexOf("### Question");
-  const contextIndex = body.indexOf("### Resume Context");
+// ─── Auth Verification ──────────────────────────────────────────────────────
 
-  if (qIndex !== -1 && contextIndex !== -1 && contextIndex > qIndex) {
-    return body.slice(qIndex + "### Question".length, contextIndex).trim();
+/**
+ * Verify the Firebase ID token from the session cookie.
+ * Returns the decoded user or null.
+ */
+async function verifyAuth() {
+  try {
+    const cookieStore = await cookies();
+    const sessionCookie = cookieStore.get("firebaseToken")?.value;
+    if (!sessionCookie) return null;
+    const decoded = await adminAuth.verifyIdToken(sessionCookie);
+    return decoded;
+  } catch (error) {
+    console.error("Auth verification failed:", error.message);
+    return null;
   }
-  return question.title || "";
 }
 
 /**
- * Fetch current system status (read-only).
- * Never leaks actual secret values to the client — only reports whether they are configured.
+ * Set the session cookie after Firebase Auth sign-in.
+ */
+export async function setSessionAction(idToken) {
+  try {
+    // Verify the token is valid
+    await adminAuth.verifyIdToken(idToken);
+    const cookieStore = await cookies();
+    cookieStore.set("firebaseToken", idToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: "/",
+    });
+    return { success: true };
+  } catch (error) {
+    console.error("Error setting session:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Clear the session cookie (logout).
+ */
+export async function clearSessionAction() {
+  try {
+    const cookieStore = await cookies();
+    cookieStore.delete("firebaseToken");
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Check if the current session is authenticated.
+ */
+export async function checkAuthAction() {
+  const user = await verifyAuth();
+  return {
+    authenticated: !!user,
+    user: user ? { uid: user.uid, email: user.email, name: user.name } : null,
+  };
+}
+
+// ─── Config / Status ────────────────────────────────────────────────────────
+
+/**
+ * Get system status — API key presence, stats, etc.
  */
 export async function getConfigAction() {
   try {
-    const config = getConfig();
-    
+    const hasApiKey = !!process.env.GEMINI_API_KEY;
+    const stats = await getStats();
+    const genStatus = await getGenerationStatus();
+
     return {
       success: true,
-      vaultPath: config.vaultPath || "",
-      hasApiKey: !!config.geminiApiKey,
-      hasWebhook: !!config.webhookUrl,
-      hasCronSecret: config.cronSecret !== "preploop-default-secret" && !!config.cronSecret,
+      hasApiKey,
+      totalQuestions: stats.totalQuestions || 0,
+      questionsBySource: stats.questionsBySource || {},
+      generationStatus: genStatus,
     };
   } catch (error) {
     console.error("Error in getConfigAction:", error);
@@ -49,49 +122,46 @@ export async function getConfigAction() {
   }
 }
 
+// ─── Questions ──────────────────────────────────────────────────────────────
+
 /**
- * Fetch and categorize all active questions.
- * Returns questions categorized by status and due date.
+ * Load all questions with computed status fields.
  */
 export async function loadQuestionsAction() {
   try {
-    const questions = loadAllQuestions();
+    const questions = await loadAllQuestions();
     const todayStr = new Date().toISOString().split("T")[0];
 
     const mapped = questions.map(q => {
-      const isDue = !q.metadata["sr-due"] || q.metadata["sr-due"] <= todayStr;
+      const sr = q.sr || {};
+      const isDue = q.assigned === true && (!sr.due || sr.due <= todayStr);
       const hasAnswer = !!q.answer && q.answer.trim().length > 0;
-      const questionText = extractQuestionText(q);
 
       return {
         id: q.id,
         title: q.title,
-        filename: q.filename,
-        category: q.metadata.category || "conceptual-engineering",
-        subCategories: q.metadata.sub_categories || [],
-        difficulty: q.metadata.difficulty || "medium",
-        srDue: q.metadata["sr-due"] || todayStr,
-        srInterval: q.metadata["sr-interval"] || 1,
-        srFactor: q.metadata["sr-factor"] || 2.5,
-        srReps: q.metadata["sr-reps"] || 0,
-        questionText,
-        resumeContext: q.body.indexOf("### Resume Context") !== -1 
-          ? q.body.slice(
-              q.body.indexOf("### Resume Context") + "### Resume Context".length, 
-              q.body.indexOf("### User Answer") !== -1 ? q.body.indexOf("### User Answer") : q.body.length
-            ).trim()
-          : "",
+        category: q.category || "conceptual-engineering",
+        subCategories: q.subCategories || [],
+        difficulty: q.difficulty || "medium",
+        questionText: q.question || q.title,
+        resumeContext: q.resumeContext || "",
         answer: q.answer || "",
         feedback: q.feedback || "",
+        source: q.source || "custom",
+        sourceTargetId: q.sourceTargetId || null,
+        sourceTopic: q.sourceTopic || null,
+        srDue: sr.due || todayStr,
+        srInterval: sr.interval || 1,
+        srFactor: sr.factor || 2.5,
+        srReps: sr.reps || 0,
+        assigned: q.assigned === true,
         isDue,
-        hasAnswer
+        hasAnswer,
+        createdAt: q.createdAt,
       };
     });
 
-    return {
-      success: true,
-      questions: mapped
-    };
+    return { success: true, questions: mapped };
   } catch (error) {
     console.error("Error in loadQuestionsAction:", error);
     return { success: false, error: error.message, questions: [] };
@@ -99,110 +169,43 @@ export async function loadQuestionsAction() {
 }
 
 /**
- * Generate a new customized deck of questions and write them to the local vault.
- */
-export async function generateDailyQuestionsAction() {
-  try {
-    const newQuestions = await generateDailyQuestions();
-    
-    if (!Array.isArray(newQuestions)) {
-      throw new Error("Invalid output returned by AI generator. Expected an array.");
-    }
-
-    const created = [];
-    for (const qData of newQuestions) {
-      const q = createNewQuestion({
-        title: qData.title,
-        question: qData.question,
-        category: qData.category,
-        subCategories: qData.subCategories,
-        difficulty: qData.difficulty,
-        resumeContext: qData.resumeContext
-      });
-      created.push(q.title);
-    }
-
-    // Trigger webhook notification if configured
-    let webhookSuccess = true;
-    let webhookError = null;
-    const config = getConfig();
-    if (config.webhookUrl) {
-      const delivery = await sendWebhookNotification(newQuestions);
-      webhookSuccess = delivery.success;
-      webhookError = delivery.error;
-    }
-
-    revalidatePath("/");
-    return { 
-      success: true, 
-      count: created.length, 
-      titles: created,
-      webhookAttempted: !!config.webhookUrl,
-      webhookSuccess,
-      webhookError
-    };
-  } catch (error) {
-    console.error("Error in generateDailyQuestionsAction:", error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
  * Submit a long-form answer for evaluation.
- * Evaluates answer with Gemini and schedules the next review date via SM-2.
  */
 export async function submitAnswerAction(questionId, answerText, userRatingOverride = null) {
   try {
-    const questions = loadAllQuestions();
-    const q = questions.find(item => item.id === questionId);
+    const q = await getQuestion(questionId);
+    if (!q) throw new Error("Question not found.");
 
-    if (!q) {
-      throw new Error("Question not found.");
-    }
+    const sr = q.sr || {};
 
-    const questionText = extractQuestionText(q);
-    const resumeContext = q.body.indexOf("### Resume Context") !== -1 
-      ? q.body.slice(
-          q.body.indexOf("### Resume Context") + "### Resume Context".length, 
-          q.body.indexOf("### User Answer") !== -1 ? q.body.indexOf("### User Answer") : q.body.length
-        ).trim()
-      : "";
-
-    // Step 1: Grade answer via LLM
+    // Grade via LLM
     const { evaluationMarkdown, recommendedRating } = await evaluateAnswer(
       q.title,
-      questionText,
-      resumeContext,
+      q.question || q.title,
+      q.resumeContext || "",
       answerText
     );
 
-    // Step 2: Determine rating to apply (use user-selected override or AI recommendation)
+    // Determine rating
     const activeRating = userRatingOverride !== null ? userRatingOverride : recommendedRating;
 
-    // Step 3: Run SM-2 spacing calculations
-    const currentInterval = q.metadata["sr-interval"] || 0;
-    const currentRepetitions = q.metadata["sr-reps"] || 0;
-    const currentEaseFactor = q.metadata["sr-factor"] || 2.5;
+    // Run SM-2
+    const srs = calculateSM2(activeRating, sr.interval || 0, sr.reps || 0, sr.factor || 2.5);
 
-    const srs = calculateSM2(activeRating, currentInterval, currentRepetitions, currentEaseFactor);
+    // Save to Firestore
+    await saveAnswerAndEvaluation(questionId, answerText, evaluationMarkdown, {
+      due: srs.nextReviewDate,
+      interval: srs.interval,
+      factor: srs.easeFactor,
+      reps: srs.repetitions,
+    });
 
-    // Step 4: Save evaluation and updated metrics back to Markdown note
-    const srsMetadata = {
-      "sr-due": srs.nextReviewDate,
-      "sr-interval": srs.interval,
-      "sr-factor": srs.easeFactor,
-      "sr-reps": srs.repetitions
-    };
-
-    saveAnswerAndEvaluation(questionId, answerText, evaluationMarkdown, srsMetadata);
-
-    revalidatePath("/");
     return {
       success: true,
       evaluationMarkdown,
       recommendedRating,
       appliedRating: activeRating,
-      srs
+      srs,
     };
   } catch (error) {
     console.error("Error in submitAnswerAction:", error);
@@ -211,49 +214,20 @@ export async function submitAnswerAction(questionId, answerText, userRatingOverr
 }
 
 /**
- * Permit the user to override/update the SM-2 scheduling score manually.
+ * Override the SM-2 rating manually.
  */
 export async function saveCustomRatingAction(questionId, rating) {
   try {
-    const questions = loadAllQuestions();
-    const q = questions.find(item => item.id === questionId);
+    const q = await getQuestion(questionId);
+    if (!q) throw new Error("Question not found.");
 
-    if (!q) {
-      throw new Error("Question not found.");
-    }
+    const sr = q.sr || {};
+    const adjustedReps = Math.max(0, (sr.reps || 0) - 1);
+    const srs = calculateSM2(rating, sr.interval || 0, adjustedReps, sr.factor || 2.5);
 
-    // Run SM-2 with the manual rating
-    // Note: We use the existing stats BEFORE this update to run a clean calculation
-    const currentInterval = q.metadata["sr-interval"] || 0;
-    
-    // Since reps was already incremented if they just answered it, let's look at repetitions:
-    // If we are overriding, we calculate from the *previous* state. But to keep it simple and robust,
-    // we recalculate using the current factors in frontmatter, but reset reps appropriately based on rating.
-    const currentRepetitions = q.metadata["sr-reps"] || 0;
-    const currentEaseFactor = q.metadata["sr-factor"] || 2.5;
+    await updateQuestionSRS(questionId, srs);
 
-    // We calculate a clean SM2 update.
-    // If rating is >= 3, they get mapped to next interval. If < 3, it resets repetitions.
-    // To avoid double-incrementing reps, let's treat it as adjusting the *current* state.
-    // We adjust by passing reps - 1 if reps > 0 (assuming they just answered it) or just using current reps.
-    const adjustedReps = Math.max(0, currentRepetitions - 1);
-    const srs = calculateSM2(rating, currentInterval, adjustedReps, currentEaseFactor);
-
-    const srsMetadata = {
-      "sr-due": srs.nextReviewDate,
-      "sr-interval": srs.interval,
-      "sr-factor": srs.easeFactor,
-      "sr-reps": srs.repetitions
-    };
-
-    // Save back to file (keep answer and feedback unchanged, only update metadata frontmatter)
-    saveAnswerAndEvaluation(questionId, q.answer || "", q.feedback || "", srsMetadata);
-
-    revalidatePath("/");
-    return {
-      success: true,
-      srs
-    };
+    return { success: true, srs };
   } catch (error) {
     console.error("Error in saveCustomRatingAction:", error);
     return { success: false, error: error.message };
@@ -261,24 +235,102 @@ export async function saveCustomRatingAction(questionId, rating) {
 }
 
 /**
- * Load the raw schema.yaml content for the read-only Profile viewer.
+ * Create a custom question (manually authored by user).
+ */
+export async function createCustomQuestionAction(data) {
+  try {
+    const question = await createQuestion({
+      title: data.title,
+      question: data.question || data.title,
+      category: data.category || "conceptual-engineering",
+      subCategories: data.subCategories || [],
+      difficulty: data.difficulty || "medium",
+      resumeContext: data.resumeContext || "",
+      source: "custom",
+    });
+
+    return { success: true, question };
+  } catch (error) {
+    console.error("Error creating custom question:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Delete a question by ID.
+ */
+export async function deleteQuestionAction(questionId) {
+  try {
+    await deleteQuestion(questionId);
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting question:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ─── Resume Schema Ingestion ────────────────────────────────────────────────
+
+/**
+ * Upload and ingest a resume schema — saves to Firestore and generates ~150 questions.
+ * This is the heavy ingestion pipeline.
+ */
+export async function ingestResumeSchemaAction(yamlContent) {
+  try {
+    // Save schema to Firestore
+    await saveResumeSchema(yamlContent);
+    await setGenerationStatus("generating");
+
+    // Run the full ingestion pipeline
+    const questions = await runResumeIngestion(yamlContent);
+
+    if (questions.length === 0) {
+      await setGenerationStatus("complete");
+      return { success: true, count: 0, message: "No questions generated. Check your schema format." };
+    }
+
+    // Batch save to Firestore
+    const created = await createQuestionsBatch(questions);
+
+    await setGenerationStatus("complete");
+
+    return {
+      success: true,
+      count: created.length,
+      message: `Successfully generated ${created.length} interview questions from your resume.`,
+    };
+  } catch (error) {
+    console.error("Error in ingestResumeSchemaAction:", error);
+    await setGenerationStatus("error").catch(() => {});
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Load the resume schema from Firestore.
  */
 export async function loadResumeSchemaAction() {
   try {
-    const { path, content } = loadResumeSchemaRaw();
-    return { success: true, path, content };
+    const schema = await loadResumeSchema();
+    return {
+      success: true,
+      content: schema?.rawYaml || null,
+      generationStatus: schema?.generationStatus || "none",
+    };
   } catch (error) {
     console.error("Error loading resume schema:", error);
     return { success: false, error: error.message };
   }
 }
 
+// ─── Target Ingestion ───────────────────────────────────────────────────────
+
 /**
- * Load all active target role documents
+ * Load all targets.
  */
 export async function loadTargetsAction() {
   try {
-    const targets = loadAllTargets();
+    const targets = await loadAllTargets();
     return { success: true, targets };
   } catch (error) {
     console.error("Error loading targets:", error);
@@ -287,26 +339,99 @@ export async function loadTargetsAction() {
 }
 
 /**
- * Save/create a target document
+ * Save a target and auto-generate company-specific questions.
  */
-export async function saveTargetAction(filename, content) {
+export async function saveTargetAction(targetData) {
   try {
-    const target = saveTargetFile(filename, content);
-    revalidatePath("/");
-    return { success: true, target };
+    // Save the target
+    const target = await saveTarget({
+      company: targetData.company || "",
+      role: targetData.role || "",
+      title: targetData.title || `${targetData.company} — ${targetData.role}`,
+      content: targetData.content || "",
+    });
+
+    // Get resume schema for cross-referencing
+    const schema = await loadResumeSchema();
+    const rawYaml = schema?.rawYaml || null;
+
+    // Get existing question titles for dedup
+    const existingTitles = await getQuestionTitlesForTarget(target.id);
+
+    // Generate company-specific questions
+    const questions = await generateTargetQuestions(target, rawYaml, existingTitles);
+
+    let createdCount = 0;
+    if (questions.length > 0) {
+      // Add target ID to each question
+      const questionsWithTarget = questions.map(q => ({
+        ...q,
+        sourceTargetId: target.id,
+      }));
+
+      const created = await createQuestionsBatch(questionsWithTarget);
+      createdCount = created.length;
+
+      // Update target question count
+      await updateTargetQuestionCount(target.id, existingTitles.length + createdCount);
+    }
+
+    return {
+      success: true,
+      target,
+      questionsGenerated: createdCount,
+      message: `Target saved. Generated ${createdCount} interview questions for ${targetData.company}.`,
+    };
   } catch (error) {
-    console.error("Error saving target:", error);
+    console.error("Error in saveTargetAction:", error);
     return { success: false, error: error.message };
   }
 }
 
 /**
- * Delete a target document
+ * Refresh questions for an existing target (generate more with dedup).
  */
-export async function deleteTargetAction(filename) {
+export async function refreshTargetQuestionsAction(targetId) {
   try {
-    deleteTargetFile(filename);
-    revalidatePath("/");
+    const target = await getTarget(targetId);
+    if (!target) throw new Error("Target not found.");
+
+    const schema = await loadResumeSchema();
+    const rawYaml = schema?.rawYaml || null;
+    const existingTitles = await getQuestionTitlesForTarget(targetId);
+
+    const questions = await generateTargetQuestions(target, rawYaml, existingTitles);
+
+    let createdCount = 0;
+    if (questions.length > 0) {
+      const questionsWithTarget = questions.map(q => ({
+        ...q,
+        sourceTargetId: targetId,
+      }));
+
+      const created = await createQuestionsBatch(questionsWithTarget);
+      createdCount = created.length;
+
+      await updateTargetQuestionCount(targetId, existingTitles.length + createdCount);
+    }
+
+    return {
+      success: true,
+      questionsGenerated: createdCount,
+      message: `Generated ${createdCount} new questions for ${target.company || target.title}.`,
+    };
+  } catch (error) {
+    console.error("Error refreshing target questions:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Delete a target and optionally its questions.
+ */
+export async function deleteTargetAction(targetId, deleteQuestions = false) {
+  try {
+    await deleteTarget(targetId, deleteQuestions);
     return { success: true };
   } catch (error) {
     console.error("Error deleting target:", error);
@@ -314,60 +439,87 @@ export async function deleteTargetAction(filename) {
   }
 }
 
+// ─── Topic-Based Generation ─────────────────────────────────────────────────
+
 /**
- * Send daily questions to Discord or Slack webhook if configured
+ * Generate questions for a user-specified topic.
+ * Returns preview (not saved yet) — user picks which to save.
  */
-export async function sendWebhookNotification(questions) {
+export async function generateTopicQuestionsAction(topic, contextSources = {}) {
   try {
-    const config = getConfig();
-    const webhookUrl = config.webhookUrl;
-    
-    if (!webhookUrl) {
-      return { success: true, message: "No webhook configured." };
+    const schema = await loadResumeSchema();
+    const rawYaml = schema?.rawYaml || null;
+
+    // Build context sources for the LLM
+    const llmContext = {
+      useResume: contextSources.useResume || false,
+    };
+
+    // If a target is selected, load its content
+    if (contextSources.targetId) {
+      const target = await getTarget(contextSources.targetId);
+      if (target) {
+        llmContext.targetContent = target.content;
+        llmContext.targetCompany = target.company;
+        llmContext.targetRole = target.role;
+      }
     }
-    
-    // Format the payload based on Discord or Slack
-    const isDiscord = webhookUrl.includes("discord.com");
-    let payload = {};
-    
-    if (isDiscord) {
-      payload = {
-        username: "PrepLoop Coach",
-        content: `🎯 **${questions.length} New Daily Prep Cards Generated!**`,
-        embeds: questions.map((q) => ({
-          title: `📝 [${q.category.toUpperCase()}] ${q.title} (${q.difficulty.toUpperCase()})`,
-          description: `**Resume Context Rationale:**\n${q.resumeContext}\n\n**Question:**\n${q.question}`,
-          color: q.difficulty === "hard" ? 15548997 : q.difficulty === "medium" ? 16753920 : 3066993, // Red, Orange, Green
-          fields: [
-            { name: "Tags", value: (q.subCategories || []).map(t => `#${t}`).join(" ") || "None", inline: true }
-          ]
-        }))
-      };
-    } else {
-      // Default / Slack format
-      payload = {
-        text: `🎯 *${questions.length} New Daily Prep Cards Generated!*\n\n` + 
-          questions.map((q, idx) => {
-            return `*${idx + 1}. [${q.category.toUpperCase()}] ${q.title} (${q.difficulty.toUpperCase()})*\n*Rationale:* ${q.resumeContext}\n*Question:* ${q.question}\n*Tags:* ${(q.subCategories || []).map(t => `#${t}`).join(" ") || "None"}\n`;
-          }).join("\n---\n\n")
-      };
-    }
-    
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    
-    return { success: true };
+
+    const questions = await generateTopicQuestions(topic, llmContext, rawYaml);
+
+    return {
+      success: true,
+      questions: questions.map((q, idx) => ({
+        ...q,
+        previewId: `preview-${idx}-${Date.now()}`,
+      })),
+    };
   } catch (error) {
-    console.error("Webhook delivery failed:", error);
+    console.error("Error generating topic questions:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Save selected topic-generated questions from the preview.
+ */
+export async function saveTopicQuestionsAction(questions, topic) {
+  try {
+    const questionsToSave = questions.map(q => ({
+      ...q,
+      source: "topic-generated",
+      sourceTopic: topic.toLowerCase(),
+    }));
+
+    const created = await createQuestionsBatch(questionsToSave);
+
+    // Track this topic
+    await addGeneratedTopic(topic);
+
+    return {
+      success: true,
+      count: created.length,
+      message: `Saved ${created.length} questions about "${topic}".`,
+    };
+  } catch (error) {
+    console.error("Error saving topic questions:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Server action to activate N daily questions.
+ */
+export async function activateDailyQuestionsAction(count = 5) {
+  try {
+    const activated = await activateDailyQuestions(count);
+    return {
+      success: true,
+      count: activated.length,
+      activated,
+    };
+  } catch (error) {
+    console.error("Error in activateDailyQuestionsAction:", error);
     return { success: false, error: error.message };
   }
 }
