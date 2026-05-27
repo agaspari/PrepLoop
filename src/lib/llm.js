@@ -87,53 +87,10 @@ ${t.content}
 }
 
 /**
- * Generate 3-5 daily interview questions tailored to the candidate's skills and goals.
+ * Helper to call Gemini and parse JSON response
  */
-export async function generateDailyQuestions() {
-  const resumeText = getCleanResumeContext();
-  const targetsText = getCleanTargetsContext();
+async function callGeminiJson(systemPrompt, prompt) {
   const ai = getGeminiClient();
-  
-  const systemPrompt = `
-You are a panel of senior interviewers preparing a short daily prep deck for a software engineering candidate. Use the candidate's resume and target roles below to generate questions that are concrete, varied, and calibrated.
-
-# Output schema
-Return ONLY a JSON array of 3 to 5 question objects. Each object must have these fields:
-- "title": short, specific question title (≤ 12 words). Avoid generic titles.
-- "question": the full question text. Anchor it to a specific fact, project, technology, or claim from the candidate's profile. Ask for trade-offs, design decisions, failure modes, or defense of real choices — not pseudocode.
-- "category": one of "system-design", "conceptual-engineering", "behavioral".
-- "subCategories": 2–5 lowercase tags for the topics involved (e.g. ["postgres", "indexing", "scaling"]).
-- "difficulty": one of "easy", "medium", "hard".
-- "resumeContext": 1–3 sentences naming the specific resume fact, project, or skill that motivated this question.
-
-# Difficulty distribution (strict)
-The deck must contain a mix of difficulties:
-- At least one "easy" warm-up that asks the candidate to clearly explain a fundamental concept tied to their stack.
-- At least one "medium" question probing trade-offs or alternatives on a real project.
-- The remainder may be "hard" — deeper architecture, design under constraints, or rigorous behavioral defenses.
-NEVER return a deck where every question is "hard". A deck that is all-hard will be rejected.
-
-# Variety rules
-- Spread across categories: include at least two of {system-design, conceptual-engineering, behavioral} unless the target roles clearly demand otherwise.
-- Spread across the resume: do not center two questions on the same project, company, or fact. Rotate through the candidate's experience.
-- When target roles are provided, prefer facts that intersect with those roles.
-
-# Quality bar
-- Every question must be anchored to something concrete in the profile (a project, a named technology, an outcome, a degree focus). Vague prompts like "tell me about a time you led a team" are not acceptable unless tied to a specific role or claim.
-- For system-design / conceptual questions: ask about decisions, trade-offs, scaling limits, data consistency, security, failure modes. Do not ask the candidate to write code.
-- For behavioral questions: challenge a stated outcome. Ask how it was measured, what was rejected, who pushed back, what failed first.
-
-${targetsText ? `# Target roles
-Align scenarios, scale, and technologies with these target roles when relevant:
-${targetsText}
-` : ''}
-
-# Candidate profile
-${resumeText}
-  `.trim();
-
-  const prompt = "Generate today's prep deck (3–5 questions). Apply the difficulty distribution and variety rules strictly. Return JSON only.";
-
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: systemPrompt + '\n\n' + prompt,
@@ -141,7 +98,7 @@ ${resumeText}
       responseMimeType: 'application/json'
     }
   });
-
+  
   const rawJson = response.text;
   try {
     return JSON.parse(rawJson);
@@ -152,13 +109,134 @@ ${resumeText}
 }
 
 /**
+ * Generate N questions focused strictly on general resume profile.
+ */
+async function generateResumeOnlyQuestions(resumeText, count) {
+  if (count <= 0) return [];
+  
+  const systemPrompt = `
+You are a senior software engineering interviewer preparing a set of short daily interview questions for a candidate. Focus strictly on their resume experiences, past projects, and core technical skills.
+
+# Output schema
+Return ONLY a JSON array of exactly ${count} question objects. Each object must have these fields:
+- "title": short, specific question title (≤ 12 words). Avoid generic titles.
+- "question": the full question text. Anchor it to a specific fact, project, technology, or claim from the candidate's profile.
+  * For "conceptual-engineering" questions (especially Easy/Medium): Focus on direct technical fundamentals, low-level mechanics, data structures, or runtime behavior of their technologies (e.g. JVM memory, Go channels, Java HashMap collision resolution, cache-locality, DB indexes). Structure these questions progressively using 1-2 concise bulleted follow-ups (e.g. "What is [X]?\n- How does it handle [Y]?\n- Which approach is better for [Z] and why?"). Keep them direct, concise, and realistic.
+  * For "system-design" / "behavioral": Ask for architectural trade-offs, scaling limits, data consistency, or defense of choices as usual. Do not ask for code.
+- "category": one of "system-design", "conceptual-engineering", "behavioral".
+- "subCategories": 2–5 lowercase tags for the topics involved (e.g. ["postgres", "indexing", "scaling"]).
+- "difficulty": one of "easy", "medium", "hard".
+- "resumeContext": 1–2 sentences naming the specific resume fact, project, or skill that motivated this question.
+
+# Difficulty distribution constraints
+- If generating 1 question: Make it "easy" or "medium".
+- If generating 2 questions: Make one "easy" warm-up focused on low-level mechanics, and one "medium" probing trade-offs or internals.
+- If generating 3 or more questions: Include at least one "easy" warm-up, at least one "medium" question, and the remainder "hard".
+NEVER return a deck where every question is "hard".
+
+# Variety rules
+- Spread across categories: include at least two of {system-design, conceptual-engineering, behavioral} if generating multiple questions.
+- Spread across the resume: do not center two questions on the same project, company, or fact. Rotate through the candidate's experience.
+
+# Quality bar
+- Every question must be anchored to something concrete in the profile (a project, a named technology, an outcome, a degree focus). Vague prompts like "tell me about a time you led a team" are not acceptable.
+- For system-design questions: ask about decisions, trade-offs, scaling limits, data consistency, security, failure modes. Do not ask the candidate to write code.
+- For conceptual-engineering questions: focus on the inner workings, algorithmic trade-offs, data structures, or performance implications (like cache efficiency or memory locality) of languages and tools in their stack. Make them direct, concise, and progressive with bulleted follow-up queries.
+- For behavioral questions: challenge a stated outcome. Ask how it was measured, what was rejected, who pushed back, what failed first.
+
+# Constraints
+- Do NOT reference target roles or any specific job descriptions. Focus purely on general resume facts and tech stack.
+
+# Candidate profile
+${resumeText}
+  `.trim();
+
+  const prompt = `Generate exactly ${count} distinct interview questions. Return JSON only.`;
+  return await callGeminiJson(systemPrompt, prompt);
+}
+
+/**
+ * Generate N questions tailored strictly to a specific target role.
+ */
+async function generateTargetAlignedQuestions(resumeText, target, count) {
+  if (count <= 0 || !target) return [];
+  
+  const systemPrompt = `
+You are a senior software engineering interviewer preparing tailored interview questions for a candidate. Focus strictly on the intersection of the candidate's resume and the specific target role described below.
+
+# Target Role to Align With
+Title: ${target.title}
+Role Description:
+${target.content}
+
+# Output schema
+Return ONLY a JSON array of exactly ${count} question objects. Each object must have these fields:
+- "title": short, specific question title (≤ 12 words). Avoid generic titles.
+- "question": the full question text. Anchor it to a specific project, claim, or technology from their profile, but frame the scenario or architectural trade-offs around the requirements of the target role above. Do not ask for code.
+- "category": one of "system-design", "conceptual-engineering", "behavioral".
+- "subCategories": 2–5 lowercase tags for the topics involved (e.g. ["postgres", "indexing", "scaling"]).
+- "difficulty": one of "easy", "medium", "hard".
+- "resumeContext": 1–2 sentences. Must start with the prefix "Tailored for ${target.title}: " followed by the specific resume fact and why it aligns with the target role.
+
+# Constraints
+- Every question must be directly related to the target role.
+- Focus on the intersection: find facts in the candidate's profile that are relevant to the target role requirements and design a targeted scenario.
+
+# Candidate profile
+${resumeText}
+  `.trim();
+
+  const prompt = `Generate exactly ${count} target-aligned interview questions. Return JSON only.`;
+  return await callGeminiJson(systemPrompt, prompt);
+}
+
+/**
+ * Generate 3-5 daily interview questions tailored to the candidate's skills and goals.
+ */
+export async function generateDailyQuestions() {
+  const resumeText = getCleanResumeContext();
+  const allTargets = loadAllTargets();
+  
+  let questionsList = [];
+  
+  if (allTargets.length === 0) {
+    // Generate 3–4 general resume-only questions
+    questionsList = await generateResumeOnlyQuestions(resumeText, 3);
+  } else {
+    // Determine the mix programmatically: 2 resume-only, 1 target-aligned
+    const resumeCount = 2;
+    const targetCount = 1;
+    
+    // Pick 1 random target role from the list
+    const randomTargetIndex = Math.floor(Math.random() * allTargets.length);
+    const selectedTarget = allTargets[randomTargetIndex];
+    
+    // Generate questions using both helpers
+    const resumeQuestions = await generateResumeOnlyQuestions(resumeText, resumeCount);
+    const targetQuestions = await generateTargetAlignedQuestions(resumeText, selectedTarget, targetCount);
+    
+    questionsList = [...resumeQuestions, ...targetQuestions];
+  }
+  
+  // Shuffle list so target-aligned and general questions are mixed
+  return questionsList.sort(() => Math.random() - 0.5);
+}
+
+/**
  * Grade and evaluate the candidate's long-form answer.
  */
 export async function evaluateAnswer(questionTitle, questionText, resumeContext, userAnswer) {
   const ai = getGeminiClient();
   
   const prompt = `
-You are a senior interviewer evaluating a candidate's long-form answer. Grade rigorously but fairly, calibrated to the apparent difficulty of the question — not every question deserves FAANG-tier expectations.
+You are a senior interviewer evaluating a candidate's answer. Grade rigorously but fairly, calibrated to the apparent difficulty and type of the question — not every question deserves FAANG-tier expectations.
+
+### EVALUATION CALIBRATION FOR CONCISENESS
+If the question is a direct technical conceptual question focusing on low-level mechanics or data structures (e.g. Java HashMap internals, Go channels, DB index structures), **DO NOT** penalize the candidate for omitting out-of-scope architectural concepts (such as security, multi-region scaling, load balancing, or network configurations) unless the question explicitly asked for them.
+Instead:
+- Reward answers that are highly precise, direct, and concise (high signal-to-noise ratio).
+- Focus feedback on the specific technical details asked in the prompt.
+- Calibrate the score based on their depth of understanding of the direct question.
 
 ### QUESTION
 Title: ${questionTitle}
@@ -173,7 +251,7 @@ Return clean Markdown with these sections in order. If no answer was submitted, 
 
 1. **Score**: An overall score in the form "XX/100" and a one-sentence verdict.
 2. **Strengths**: Concrete things the candidate did well — specific claims they defended, trade-offs they raised, structure they used. Cite their wording where it helps.
-3. **Gaps & Missed Trade-offs**: Specific omissions — edge cases, scaling limits, security, data consistency, alternatives, failure modes. Avoid generic advice; tie each gap to this question.
+3. **Gaps & Missed Trade-offs**: Specific omissions or incorrect assumptions. Focus on low-level details (e.g., memory locality, cache misses, complexity, edge-cases) for conceptual engineering questions, and system/behavioral omissions for design/behavioral questions. Avoid generic advice; tie each gap directly to this question.
 4. **Ideal Answer Outline**: Bullet rubric of what a strong answer covers for THIS specific question. Tailored, not boilerplate.
 5. **SM-2 Rating Recommendation**: Recommend a score from 0 to 5 for spaced repetition:
    - **5** — Thorough, well-structured, key trade-offs covered.

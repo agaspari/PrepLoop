@@ -348,10 +348,10 @@ export default function Home() {
                   onChange={(e) => setSelectedCategory(e.target.value)}
                   className="appearance-none w-full sm:w-[150px] pl-4 pr-10 py-2 bg-white/5 border border-white/5 rounded-xl text-xs text-zinc-300 hover:text-white cursor-pointer focus:outline-none focus:border-purple-500 transition-all"
                 >
-                  <option value="all">All Categories</option>
-                  <option value="system-design">System Design</option>
-                  <option value="conceptual-engineering">Conceptual</option>
-                  <option value="behavioral">Behavioral</option>
+                  <option value="all" className="bg-zinc-900 text-zinc-100">All Categories</option>
+                  <option value="system-design" className="bg-zinc-900 text-zinc-100">System Design</option>
+                  <option value="conceptual-engineering" className="bg-zinc-900 text-zinc-100">Conceptual</option>
+                  <option value="behavioral" className="bg-zinc-900 text-zinc-100">Behavioral</option>
                 </select>
                 <ChevronDown size={12} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
               </div>
@@ -361,12 +361,12 @@ export default function Home() {
                 <select
                   value={selectedDifficulty}
                   onChange={(e) => setSelectedDifficulty(e.target.value)}
-                  className="appearance-none w-full sm:w-[120px] pl-4 pr-10 py-2 bg-white/5 border border-white/5 rounded-xl text-xs text-zinc-300 hover:text-white cursor-pointer focus:outline-none focus:border-purple-500 transition-all"
+                  className="appearance-none w-full sm:w-[160px] pl-4 pr-10 py-2 bg-white/5 border border-white/5 rounded-xl text-xs text-zinc-300 hover:text-white cursor-pointer focus:outline-none focus:border-purple-500 transition-all"
                 >
-                  <option value="all">All Difficulties</option>
-                  <option value="easy">Easy</option>
-                  <option value="medium">Medium</option>
-                  <option value="hard">Hard</option>
+                  <option value="all" className="bg-zinc-900 text-zinc-100">All Difficulties</option>
+                  <option value="easy" className="bg-zinc-900 text-zinc-100">Easy</option>
+                  <option value="medium" className="bg-zinc-900 text-zinc-100">Medium</option>
+                  <option value="hard" className="bg-zinc-900 text-zinc-100">Hard</option>
                 </select>
                 <ChevronDown size={12} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
               </div>
