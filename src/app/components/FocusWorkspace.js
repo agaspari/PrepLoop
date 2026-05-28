@@ -392,7 +392,7 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
             </div>
           </div>
 
-          {/* Resume Context card */}
+          {/* Resume/Target Context card */}
           {question.resumeContext && (
             <div className="shrink-0 p-5 bg-purple-950/25 border border-purple-500/25 rounded-xl relative overflow-hidden space-y-3">
               <div className="absolute top-0 right-0 p-3 opacity-10 pointer-events-none">
@@ -400,7 +400,7 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
               </div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-purple-300 flex items-center gap-2">
                 <Sparkles size={12} />
-                Resume Tailoring Rationale
+                {question.source === "target-ingestion" || question.sourceTargetId ? "Target & Resume Rationale" : "Resume Tailoring Rationale"}
               </h3>
               <p className="text-zinc-200 text-sm leading-relaxed whitespace-pre-wrap">
                 {question.resumeContext}

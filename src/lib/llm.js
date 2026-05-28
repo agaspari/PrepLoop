@@ -426,7 +426,7 @@ Return ONLY a JSON array. Each object:
   "category": "system-design" | "conceptual-engineering" | "behavioral",
   "subCategories": ["tag1", "tag2"],
   "difficulty": "easy" | "medium" | "hard",
-  "resumeContext": "1-2 sentences on how this connects to the candidate's experience and the target role"
+  "resumeContext": "A brief explanation containing two clear parts: 1) 'Resume Connection' (how this connects to the candidate's experience), and 2) 'Target Relevance' (why this is highly relevant to this specific role and company, e.g., at ${target.company || target.title})."
 }
   `.trim();
 
