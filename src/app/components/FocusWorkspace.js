@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award, Mic } from "lucide-react";
 import { submitAnswerAction } from "../actions";
 import FeedbackPanel from "./FeedbackPanel";
@@ -13,7 +13,7 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [expandedAttemptIdx, setExpandedAttemptIdx] = useState(null);
   const [isListening, setIsListening] = useState(false);
-  const [recognition, setRecognition] = useState(null);
+  const recognitionRef = useRef(null);
 
   // Loading quotes to cycle through for rich aesthetics
   const loadingTips = [
@@ -58,16 +58,16 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
   // Cleanup speech recognition on unmount
   useEffect(() => {
     return () => {
-      if (recognition) {
-        recognition.stop();
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
       }
     };
-  }, [recognition]);
+  }, []);
 
   function toggleListening() {
     if (isListening) {
-      if (recognition) {
-        recognition.stop();
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
       }
       setIsListening(false);
     } else {
@@ -88,6 +88,18 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
 
       rec.onerror = (event) => {
         console.error("Speech recognition error:", event.error);
+        
+        // Show clear user-friendly alerts for common speech recognition errors
+        if (event.error === "not-allowed") {
+          alert("🎤 Microphone access was denied! Please click the camera/microphone icon in your browser's address bar and grant permission for PrepLoop to dictate.");
+        } else if (event.error === "network") {
+          alert("🌐 Speech recognition network error. Please check your internet connection.");
+        } else if (event.error === "no-speech") {
+          console.log("No speech detected. Mic automatically timed out.");
+        } else {
+          alert(`Speech recognition error: ${event.error}`);
+        }
+        
         setIsListening(false);
       };
 
@@ -115,8 +127,12 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
         }
       };
 
-      rec.start();
-      setRecognition(rec);
+      try {
+        rec.start();
+        recognitionRef.current = rec;
+      } catch (err) {
+        console.error("Failed to start speech recognition:", err);
+      }
     }
   }
 
