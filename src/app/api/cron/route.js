@@ -43,7 +43,9 @@ async function handleCron(request) {
     if (discordWebhookUrl) {
       try {
         const requestUrl = new URL(request.url);
-        const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+        const baseUrl = requestUrl.host.includes("localhost")
+          ? `${requestUrl.protocol}//${requestUrl.host}`
+          : "https://prep-loop-alpha.vercel.app";
         
         let embed = {
           title: "🔄 PrepLoop Daily Questions Activated!",
