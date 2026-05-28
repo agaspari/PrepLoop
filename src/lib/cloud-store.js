@@ -141,10 +141,21 @@ export async function createQuestionsBatch(questionsArray) {
  * Save a user's answer and AI evaluation back to the question.
  */
 export async function saveAnswerAndEvaluation(questionId, answerText, evaluationText, srsData = null) {
+  const rating = srsData && srsData.rating !== undefined ? srsData.rating : null;
+  const timestamp = new Date().toISOString();
+
+  const attempt = {
+    answer: answerText,
+    feedback: evaluationText,
+    rating,
+    timestamp,
+  };
+
   const updateData = {
     answer: answerText,
     feedback: evaluationText,
-    updatedAt: new Date().toISOString(),
+    updatedAt: timestamp,
+    attempts: FieldValue.arrayUnion(attempt),
   };
 
   if (srsData) {

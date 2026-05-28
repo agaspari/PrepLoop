@@ -199,6 +199,7 @@ export async function submitAnswerAction(questionId, answerText, userRatingOverr
       interval: srs.interval,
       factor: srs.easeFactor,
       reps: srs.repetitions,
+      rating: activeRating,
     });
 
     return {

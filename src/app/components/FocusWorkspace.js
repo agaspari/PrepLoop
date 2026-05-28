@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2 } from "lucide-react";
+import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award } from "lucide-react";
 import { submitAnswerAction } from "../actions";
 import FeedbackPanel from "./FeedbackPanel";
 
@@ -10,6 +10,8 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [evaluation, setEvaluation] = useState(null);
   const [loadingTip, setLoadingTip] = useState("Analyzing your trade-offs...");
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [expandedAttemptIdx, setExpandedAttemptIdx] = useState(null);
 
   // Loading quotes to cycle through for rich aesthetics
   const loadingTips = [
@@ -77,11 +79,11 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
 
   return (
     <div className="fixed inset-0 z-40 bg-zinc-950 flex flex-col animate-in fade-in duration-200">
-      
+
       {/* Workspace Header */}
       <div className="h-16 border-b border-white/5 px-6 flex items-center justify-between shrink-0 glass">
         <div className="flex items-center gap-4">
-          <button 
+          <button
             onClick={onClose}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-zinc-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
           >
@@ -106,15 +108,15 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
 
       {/* Main Workspace Body */}
       <div className="flex-1 flex overflow-hidden">
-        
+
         {/* Left Pane: Question Description & Resume Context */}
         <div className="w-1/2 overflow-y-auto p-8 border-r border-white/5 flex flex-col space-y-6 bg-zinc-950/20">
-          
+
           <div className="space-y-4">
             <h1 className="text-2xl font-bold text-white tracking-tight glow-text leading-tight">
               {question.title}
             </h1>
-            
+
             {/* The Detailed Question */}
             <div className="p-5 bg-white/5 rounded-xl border border-white/5 space-y-3">
               <h3 className="text-xs font-bold uppercase tracking-wider text-purple-400 flex items-center gap-2">
@@ -156,11 +158,93 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
             </ul>
           </div>
 
+          {/* Preparation History Section */}
+          {question.attempts && question.attempts.length > 0 && (
+            <div className="p-5 bg-zinc-900/40 border border-white/5 rounded-xl space-y-3">
+              <button
+                type="button"
+                onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+                className="w-full flex items-center justify-between text-xs font-bold uppercase tracking-wider text-purple-300 hover:text-purple-200 transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <History size={13} className="text-purple-400" />
+                  Your Preparation History ({question.attempts.length})
+                </span>
+                {isHistoryOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+
+              {isHistoryOpen && (
+                <div className="pt-2 space-y-3 border-t border-white/5 animate-in fade-in duration-200">
+                  {[...question.attempts].reverse().map((attempt, index) => {
+                    const isExpanded = expandedAttemptIdx === index;
+                    const dateStr = new Date(attempt.timestamp).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    });
+
+                    const scoreMatch = attempt.feedback ? attempt.feedback.match(/(\d{1,3})\s*\/\s*100/) : null;
+                    const displayScore = scoreMatch ? `${scoreMatch[1]}/100` : null;
+
+                    return (
+                      <div key={index} className="bg-white/5 border border-white/5 rounded-lg overflow-hidden transition-all duration-200">
+                        <div
+                          onClick={() => setExpandedAttemptIdx(isExpanded ? null : index)}
+                          className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-white/5 active:bg-white/10 transition-colors"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Calendar size={12} className="text-zinc-500" />
+                            <div className="text-xs font-semibold text-zinc-300">{dateStr}</div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {attempt.rating !== null && attempt.rating !== undefined && (
+                              <span className="text-[10px] font-mono px-2 py-0.5 bg-purple-500/10 text-purple-300 border border-purple-500/25 rounded">
+                                Rating: {attempt.rating}/5
+                              </span>
+                            )}
+                            {displayScore && (
+                              <span className="text-[10px] font-mono px-2 py-0.5 bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 rounded">
+                                {displayScore}
+                              </span>
+                            )}
+                            {isExpanded ? <ChevronUp size={12} className="text-zinc-500" /> : <ChevronDown size={12} className="text-zinc-500" />}
+                          </div>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="p-4 bg-zinc-950/40 border-t border-white/5 space-y-4 text-xs animate-in slide-in-from-top-2 duration-200">
+                            {/* Attempt Solution */}
+                            <div className="space-y-1.5">
+                              <h4 className="font-semibold text-zinc-400 uppercase tracking-widest text-[9px]">Your Saved Solution</h4>
+                              <div className="p-3 bg-white/5 border border-white/5 rounded text-zinc-200 max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                                {attempt.answer}
+                              </div>
+                            </div>
+
+                            {/* Attempt Feedback */}
+                            <div className="space-y-1.5">
+                              <h4 className="font-semibold text-purple-400 uppercase tracking-widest text-[9px]">Gemini AI Feedback</h4>
+                              <div className="p-3 bg-purple-950/10 border border-purple-500/10 rounded text-zinc-300 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                                {attempt.feedback}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
 
         {/* Right Pane: Interactive Answer Input or Dynamic Feedback Visualizer */}
         <div className="w-1/2 overflow-y-auto flex flex-col bg-zinc-950/40 relative">
-          
+
           {isSubmitting && (
             <div className="absolute inset-0 z-10 bg-zinc-950/80 backdrop-blur-md flex flex-col items-center justify-center p-8 space-y-4 animate-in fade-in duration-300">
               <div className="relative flex items-center justify-center">
@@ -177,7 +261,7 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
           )}
 
           {evaluation ? (
-            <FeedbackPanel 
+            <FeedbackPanel
               questionId={question.id}
               evaluation={evaluation}
               onBack={() => setEvaluation(null)}
@@ -193,7 +277,7 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
                 </div>
               </div>
 
-              <textarea 
+              <textarea
                 value={answerText}
                 onChange={(e) => setAnswerText(e.target.value)}
                 placeholder="Write your comprehensive technical defense here... Use standard Markdown headers, code snippets, or bullet points to structure your response."
