@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron?secret=preploop-cron-secret",
+      "schedule": "0 9 * * *"
+    }
+  ]
+}

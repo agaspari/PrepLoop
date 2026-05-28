@@ -24,6 +24,7 @@ import {
   getQuestionTitlesForTarget,
   addGeneratedTopic,
   activateDailyQuestions,
+  loadDueQuestions,
 } from "../lib/cloud-store.js";
 import {
   runResumeIngestion,
@@ -509,14 +510,39 @@ export async function saveTopicQuestionsAction(questions, topic) {
 
 /**
  * Server action to activate N daily questions.
+ * Dynamically caps daily new question activations to maintain exactly 2 unanswered new questions,
+ * preventing review loops and backlog bloating.
  */
 export async function activateDailyQuestionsAction(count = 5) {
   try {
-    const activated = await activateDailyQuestions(count);
+    // 1. Calculate how many unanswered new questions are already active on the board
+    const allQuestions = await loadAllQuestions();
+    const activeUnansweredCount = allQuestions.filter(
+      q => q.assigned === true && (!q.answer || q.answer.trim().length === 0)
+    ).length;
+
+    // 2. We always want exactly 2 unanswered new questions available
+    const MAX_ACTIVE_NEW = 2;
+    const activationCount = Math.max(0, MAX_ACTIVE_NEW - activeUnansweredCount);
+
+    let activated = [];
+    if (activationCount > 0) {
+      activated = await activateDailyQuestions(activationCount);
+    }
+
+    // 3. Calculate how many reviews (previously answered questions) are due today
+    const dueQuestions = await loadDueQuestions();
+    const dueReviewsCount = dueQuestions.filter(
+      q => q.answer && q.answer.trim().length > 0
+    ).length;
+
     return {
       success: true,
       count: activated.length,
       activated,
+      existingDueCount: dueReviewsCount,
+      totalDueNow: dueReviewsCount + activated.length,
+      newQuestionsCapReached: activeUnansweredCount >= MAX_ACTIVE_NEW,
     };
   } catch (error) {
     console.error("Error in activateDailyQuestionsAction:", error);

@@ -66,7 +66,18 @@ export default function Home() {
     let result = [...questions];
 
     if (activeTab === "due") {
-      result = result.filter(q => q.isDue && !q.hasAnswer);
+      const allDueNew = result.filter(q => q.isDue && !q.hasAnswer);
+      const allDueReviews = result.filter(q => q.isDue && q.hasAnswer);
+
+      // Cap reviews at 4 to prevent study burnout
+      const visibleReviews = allDueReviews.slice(0, 4);
+      // Fill the remaining slots with new questions (at least 2, up to 6 total)
+      const remainingSlots = Math.max(0, 6 - visibleReviews.length);
+      const newCap = Math.max(2, remainingSlots);
+      const visibleNew = allDueNew.slice(0, newCap);
+
+      // Combine and cap at exactly 6 total
+      result = [...visibleReviews, ...visibleNew].slice(0, 6);
     } else if (activeTab === "answered") {
       result = result.filter(q => q.hasAnswer);
     }
@@ -110,8 +121,18 @@ export default function Home() {
 
   // Compute counters
   const totalCount = questions.length;
-  const dueCount = questions.filter(q => q.isDue && !q.hasAnswer).length;
   const answeredCount = questions.filter(q => q.hasAnswer).length;
+
+  // Calculate dynamic due count matching our allocation filter
+  const allDueNew = questions.filter(q => q.isDue && !q.hasAnswer);
+  const allDueReviews = questions.filter(q => q.isDue && q.hasAnswer);
+  
+  const visibleReviews = allDueReviews.slice(0, 4);
+  const remainingSlots = Math.max(0, 6 - visibleReviews.length);
+  const newCap = Math.max(2, remainingSlots);
+  const visibleNew = allDueNew.slice(0, newCap);
+  
+  const dueCount = Math.min(6, visibleReviews.length + visibleNew.length);
 
   return (
     <div className="flex-1 w-full min-h-screen bg-zinc-950 flex flex-col font-sans text-zinc-100 pb-20 relative overflow-x-hidden">

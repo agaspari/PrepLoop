@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# PrepLoop
+
+PrepLoop is a spaced-repetition engineering interview preparation platform. It ingests your resume schema, target job descriptions, and topics to generate highly detailed, personalized conceptual, behavioral, and system design questions. It uses the SuperMemo-2 (SM-2) spaced repetition algorithm to schedule reviews and evaluate responses using Gemini AI models.
+
+---
 
 ## Getting Started
 
-First, run the development server:
-
+### 1. Installation
+Install project dependencies:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Configure Environment Variables
+Copy `.env.example` to `.env` and fill in the required credentials:
+```bash
+cp .env.example .env
+```
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+Ensure the following variables are configured:
+* `GEMINI_API_KEY`: Your Google AI Gemini API Key.
+* `CRON_SECRET`: Secret token used to secure the Vercel Cron endpoint.
+* **Discord Integration**:
+  * `DISCORD_WEBHOOK_URL`: Your channel's incoming Discord Webhook URL.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 3. Run Development Server
+```bash
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) to view your PrepLoop interactive dashboard.
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 📅 Daily Spaced-Repetition Cron
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+PrepLoop uses a Vercel Cron configuration (`vercel.json`) to call `/api/cron` daily. 
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Core Features of the Spaced-Repetition Queue:
+1. **Dynamic Capping (2 New / 4 Reviews)**:
+   * Keeps your dashboard capped at **exactly 6 active due questions** max to prevent cognitive fatigue.
+   * Caps review backlog displays at **4 reviews**.
+   * Guarantees at least **2 new questions** are introduced daily so you continually make progress through your 200+ question bank.
+2. **Backpressure Engine**:
+   * The daily cron will check if you still have unanswered new questions on your board. If you have **2 or more unanswered new questions**, it will activate **0 new questions** today, preventing backlog accumulation when you take study breaks.
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Discord Notification Setup
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Whenever the daily cron runs, it can notify you on Discord via incoming webhooks with high-fidelity status updates.
+
+### 1. Get a Discord Webhook URL
+1. Open Discord, navigate to the text channel where you want notifications.
+2. Open channel **Settings (cog icon)** -> **Integrations** -> **Webhooks** -> **Create Webhook**.
+3. Customize the bot name/avatar and click **Copy Webhook URL**.
+
+### 2. Add it to your Config
+Add it to your local `.env` and your Vercel deployment variables:
+```env
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your-channel-id/your-webhook-token
+```
+
+### 3. Embed Alert Types Sent by the Cron:
+* **Daily Batch Activated (Purple Embed)**: Sent when new study cards are successfully assigned to your board. It lists the question titles and IDs along with a direct link to your dashboard.
+* **Daily Limit Capped (Blue Embed)**: Sent if you still have 2 unanswered new questions, noting that new cards were paused today to let you focus.
+* **Ingestion Bank Depleted (Orange Embed)**: Sent when there are no new unassigned questions left in your bank, prompting you to ingest more schemas or roles.
