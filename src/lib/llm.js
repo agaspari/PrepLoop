@@ -693,3 +693,49 @@ function safeParseJsonArray(text) {
     return [];
   }
 }
+
+/**
+ * Generate a highly detailed, personalized AI Study Guide for a question the user doesn't know.
+ */
+export async function generateStudyGuide(questionTitle, questionText, category, resumeContext) {
+  const ai = getGeminiClient();
+
+  const prompt = `
+You are an elite software engineering mentor and technical mock interviewer. A candidate is preparing for a senior/staff engineering interview but does not know how to answer the following question. 
+
+Generate a comprehensive, high-fidelity Deep-Dive Study Guide to help them master this topic and learn how to construct a stellar, senior-level response.
+
+### THE QUESTION
+Title: ${questionTitle}
+Category: ${category}
+Question Prompt: ${questionText}
+Candidate Resume Context: ${resumeContext}
+
+### YOUR STUDY GUIDE INSTRUCTIONS
+Return clean, beautifully structured Markdown with these sections in order (use clear headers and bullet points):
+
+1. **### Core Concept Breakdown**
+   - Explain the fundamental architectural, data modeling, or behavioral concepts behind this question. 
+   - What is the core engineering challenge or technical vector being tested here? Explain it simply but deeply.
+
+2. **### Senior-Level Trade-offs & Tech Connections**
+   - Analyze the critical system design considerations, engineering trade-offs (e.g. latency vs. throughput, consistency vs. availability), or technical bottlenecks.
+   - Explain how this connects to broader production scaling systems (e.g., database indexing, caching strategies, asynchronous processing, consensus algorithms, security, rate limiting, etc.).
+
+3. **### Structured Response Outline (Senior Blueprint)**
+   - Provide a step-by-step roadmap or blueprint of how to structure a winning, high-impact spoken response (e.g., STAR framework for behavioral, or components/data-flow blueprint for system design).
+   - What red flags should the candidate absolutely avoid?
+   - What key architectural keywords, terms, or production concepts should they mention to stand out as a Senior/Staff candidate?
+
+4. **### Curated Deep-Dive Resources**
+   - Provide a short list of highly specific, high-quality resources to read or study.
+   - Avoid generic links like "google.com" or "wikipedia.org". Instead, specify exact books and chapters (e.g., "Designing Data-Intensive Applications, Chapter 5: Replication"), specific company engineering blog posts (e.g., "Netflix Tech Blog on Chaos Engineering"), specific whitepapers (e.g., "The Google Spanner Paper"), or official technology documentation (e.g., "Redis cluster specifications").
+  `.trim();
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+  });
+
+  return response.text;
+}

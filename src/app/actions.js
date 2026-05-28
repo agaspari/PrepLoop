@@ -25,12 +25,15 @@ import {
   addGeneratedTopic,
   activateDailyQuestions,
   loadDueQuestions,
+  saveStudyGuide,
+  archiveQuestion,
 } from "../lib/cloud-store.js";
 import {
   runResumeIngestion,
   generateTargetQuestions,
   generateTopicQuestions,
   evaluateAnswer,
+  generateStudyGuide,
 } from "../lib/llm.js";
 import { calculateSM2 } from "../lib/srs.js";
 
@@ -156,6 +159,7 @@ export async function loadQuestionsAction() {
         srFactor: sr.factor || 2.5,
         srReps: sr.reps || 0,
         assigned: q.assigned === true,
+        archived: q.archived === true,
         isDue,
         hasAnswer,
         createdAt: q.createdAt,
@@ -267,6 +271,19 @@ export async function deleteQuestionAction(questionId) {
     return { success: true };
   } catch (error) {
     console.error("Error deleting question:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Archive a question by ID.
+ */
+export async function archiveQuestionAction(questionId) {
+  try {
+    await archiveQuestion(questionId);
+    return { success: true };
+  } catch (error) {
+    console.error("Error archiving question:", error);
     return { success: false, error: error.message };
   }
 }
@@ -519,7 +536,7 @@ export async function activateDailyQuestionsAction(count = 5) {
     // 1. Calculate how many unanswered new questions are already active on the board
     const allQuestions = await loadAllQuestions();
     const activeUnansweredCount = allQuestions.filter(
-      q => q.assigned === true && (!q.answer || q.answer.trim().length === 0)
+      q => q.assigned === true && q.archived !== true && (!q.answer || q.answer.trim().length === 0)
     ).length;
 
     // 2. We always want exactly 2 unanswered new questions available
@@ -547,6 +564,35 @@ export async function activateDailyQuestionsAction(count = 5) {
     };
   } catch (error) {
     console.error("Error in activateDailyQuestionsAction:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Generate a personalized study guide for a question and save it to Firestore.
+ */
+export async function generateStudyGuideAction(questionId) {
+  try {
+    const q = await getQuestion(questionId);
+    if (!q) throw new Error("Question not found.");
+
+    // Generate the study guide via LLM
+    const studyGuideMarkdown = await generateStudyGuide(
+      q.title,
+      q.question || q.title,
+      q.category,
+      q.resumeContext || ""
+    );
+
+    // Save to Firestore
+    await saveStudyGuide(questionId, studyGuideMarkdown);
+
+    return {
+      success: true,
+      studyGuide: studyGuideMarkdown,
+    };
+  } catch (error) {
+    console.error("Error in generateStudyGuideAction:", error);
     return { success: false, error: error.message };
   }
 }

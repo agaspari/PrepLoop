@@ -1,6 +1,6 @@
 "use client";
 
-import { Calendar, Layers, Trash2, FileText, Target, Sparkles, BookOpen } from "lucide-react";
+import { Calendar, Layers, Trash2, FileText, Target, Sparkles, BookOpen, Archive } from "lucide-react";
 
 const sourceConfig = {
   "resume-ingestion": { label: "Resume", icon: FileText, color: "bg-purple-500/10 text-purple-400 border-purple-500/20" },
@@ -9,7 +9,7 @@ const sourceConfig = {
   "custom": { label: "Custom", icon: BookOpen, color: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
 };
 
-export default function QuestionCard({ question, onClick, onDelete }) {
+export default function QuestionCard({ question, onClick, onDelete, onArchive }) {
   const {
     title,
     category,
@@ -43,6 +43,11 @@ export default function QuestionCard({ question, onClick, onDelete }) {
   function handleDelete(e) {
     e.stopPropagation();
     if (onDelete) onDelete(question.id);
+  }
+
+  function handleArchive(e) {
+    e.stopPropagation();
+    if (onArchive) onArchive(question.id);
   }
 
   return (
@@ -121,6 +126,15 @@ export default function QuestionCard({ question, onClick, onDelete }) {
             <Calendar size={10} className="text-zinc-600" />
             <span>{srInterval}d</span>
           </div>
+          {onArchive && (
+            <button
+              onClick={handleArchive}
+              className="p-1 rounded hover:bg-amber-500/20 text-zinc-600 hover:text-amber-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+              title="Archive question"
+            >
+              <Archive size={11} />
+            </button>
+          )}
           {onDelete && (
             <button
               onClick={handleDelete}

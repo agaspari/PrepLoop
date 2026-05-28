@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award, Mic } from "lucide-react";
-import { submitAnswerAction } from "../actions";
+import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award, Mic, Archive } from "lucide-react";
+import { submitAnswerAction, generateStudyGuideAction, archiveQuestionAction } from "../actions";
 import FeedbackPanel from "./FeedbackPanel";
 
 export default function FocusWorkspace({ question, onClose, onRefresh }) {
@@ -14,6 +14,9 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
   const [expandedAttemptIdx, setExpandedAttemptIdx] = useState(null);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
+  const [studyGuide, setStudyGuide] = useState(question.studyGuide || null);
+  const [showStudyGuide, setShowStudyGuide] = useState(false);
+  const [isGeneratingGuide, setIsGeneratingGuide] = useState(false);
 
   // Loading quotes to cycle through for rich aesthetics
   const loadingTips = [
@@ -160,6 +163,152 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
     }
   }
 
+  async function handleArchive() {
+    if (!confirm("Archive this question? It will be removed from your daily rotation but kept for deduplication.")) return;
+    const result = await archiveQuestionAction(question.id);
+    if (result.success) {
+      if (onRefresh) onRefresh();
+      onClose();
+    } else {
+      alert("Error archiving question: " + (result.error || "Unknown error"));
+    }
+  }
+
+  async function handleGenerateStudyGuide() {
+    if (isGeneratingGuide) return;
+    setIsGeneratingGuide(true);
+
+    const result = await generateStudyGuideAction(question.id);
+    setIsGeneratingGuide(false);
+
+    if (result.success) {
+      setStudyGuide(result.studyGuide);
+      setShowStudyGuide(true);
+      if (onRefresh) onRefresh();
+    } else {
+      alert("Error generating study guide: " + (result.error || "Unknown error"));
+    }
+  }
+
+  // Parse markdown lines to rich JSX inside the workspace
+  function renderMarkdown(md) {
+    if (!md) return null;
+    const lines = md.split("\n");
+    let inList = false;
+    let listItems = [];
+    const elements = [];
+
+    const flushList = (key) => {
+      if (inList && listItems.length > 0) {
+        elements.push(
+          <ul key={`ul-${key}`} className="list-disc list-inside ml-5 mb-4 text-sm text-zinc-300 space-y-1.5">
+            {listItems}
+          </ul>
+        );
+        listItems = [];
+        inList = false;
+      }
+    };
+
+    lines.forEach((line, index) => {
+      const trimmed = line.trim();
+
+      if (trimmed === "---") {
+        flushList(index);
+        elements.push(<hr key={index} className="border-white/10 my-4" />);
+        return;
+      }
+
+      if (trimmed.startsWith("### ")) {
+        flushList(index);
+        elements.push(
+          <h3 key={index} className="text-md font-bold text-purple-300 mt-5 mb-2.5 flex items-center gap-2 border-b border-white/5 pb-1">
+            {trimmed.slice(4)}
+          </h3>
+        );
+        return;
+      }
+      if (trimmed.startsWith("## ")) {
+        flushList(index);
+        elements.push(
+          <h2 key={index} className="text-lg font-bold text-white mt-6 mb-3">
+            {trimmed.slice(3)}
+          </h2>
+        );
+        return;
+      }
+      if (trimmed.startsWith("# ")) {
+        flushList(index);
+        elements.push(
+          <h1 key={index} className="text-xl font-bold text-white mt-8 mb-4 tracking-tight border-b border-purple-500/20 pb-2">
+            {trimmed.slice(2)}
+          </h1>
+        );
+        return;
+      }
+
+      if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+        inList = true;
+        let content = trimmed.slice(2);
+        
+        const boldRegex = /\*\*(.*?)\*\*/g;
+        let formattedContent = [];
+        let lastIdx = 0;
+        let match;
+        
+        while ((match = boldRegex.exec(content)) !== null) {
+          if (match.index > lastIdx) {
+            formattedContent.push(content.slice(lastIdx, match.index));
+          }
+          formattedContent.push(<strong key={match.index} className="text-white font-semibold">{match[1]}</strong>);
+          lastIdx = boldRegex.lastIndex;
+        }
+        if (lastIdx < content.length) {
+          formattedContent.push(content.slice(lastIdx));
+        }
+
+        listItems.push(
+          <li key={`li-${index}`} className="leading-relaxed">
+            {formattedContent.length > 0 ? formattedContent : content}
+          </li>
+        );
+        return;
+      }
+
+      if (!trimmed) {
+        flushList(index);
+        return;
+      }
+
+      flushList(index);
+
+      const boldRegex = /\*\*(.*?)\*\*/g;
+      let formattedParagraph = [];
+      let lastIdx = 0;
+      let match;
+      
+      while ((match = boldRegex.exec(trimmed)) !== null) {
+        if (match.index > lastIdx) {
+          formattedParagraph.push(trimmed.slice(lastIdx, match.index));
+        }
+        formattedParagraph.push(<strong key={match.index} className="text-white font-semibold">{match[1]}</strong>);
+        lastIdx = boldRegex.lastIndex;
+      }
+      if (lastIdx < trimmed.length) {
+        formattedParagraph.push(trimmed.slice(lastIdx));
+      }
+
+      elements.push(
+        <p key={index} className="text-sm text-zinc-300 leading-relaxed mb-3.5">
+          {formattedParagraph.length > 0 ? formattedParagraph : trimmed}
+        </p>
+      );
+    });
+
+    flushList("end");
+    return elements;
+  }
+
   return (
     <div className="fixed inset-0 z-40 bg-zinc-950 flex flex-col animate-in fade-in duration-200">
 
@@ -172,6 +321,15 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
           >
             <ArrowLeft size={16} />
             <span>Dashboard</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleArchive}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-zinc-400 hover:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 transition-all cursor-pointer"
+            title="Archive question"
+          >
+            <Archive size={16} />
+            <span>Archive</span>
           </button>
           <div className="h-4 w-px bg-white/10" />
           <div className="flex items-center gap-2">
@@ -343,7 +501,48 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
             </div>
           )}
 
-          {evaluation ? (
+          {isGeneratingGuide && (
+            <div className="absolute inset-0 z-10 bg-zinc-950/80 backdrop-blur-md flex flex-col items-center justify-center p-8 space-y-4 animate-in fade-in duration-300">
+              <div className="relative flex items-center justify-center animate-pulse">
+                <Loader2 size={48} className="text-purple-500 animate-spin" />
+              </div>
+              <p className="text-white font-semibold text-lg tracking-tight text-center">
+                Generating Study Guide
+              </p>
+              <p className="text-zinc-400 text-xs text-center max-w-sm">
+                Architecting core concepts, trade-off blueprints, and senior-level resources...
+              </p>
+            </div>
+          )}
+
+          {showStudyGuide && studyGuide ? (
+            <div className="flex-1 flex flex-col p-8 space-y-6 animate-in slide-in-from-right-10 duration-200">
+              <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center">
+                    <BookOpen size={20} className="text-purple-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white tracking-tight">AI Study Guide</h2>
+                    <p className="text-xs text-zinc-500">Tailored senior engineering roadmap</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowStudyGuide(false)}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Ready to Answer? Open Editor
+                </button>
+              </div>
+
+              <div className="flex-1 p-6 bg-white/5 border border-white/5 rounded-2xl overflow-y-auto max-h-[550px]">
+                <div className="prose-custom font-sans">
+                  {renderMarkdown(studyGuide)}
+                </div>
+              </div>
+            </div>
+          ) : evaluation ? (
             <FeedbackPanel
               questionId={question.id}
               evaluation={evaluation}
@@ -383,36 +582,48 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
                 required
               />
 
-              <div className="flex items-center gap-3">
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !answerText.trim()}
-                  className="flex-1 glow-btn cursor-pointer py-4 px-6 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/20 text-center tracking-tight transition-all duration-300"
-                >
-                  Submit Answer for AI Evaluation
-                </button>
-                
-                {question.hasAnswer && (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
                   <button
-                    type="button"
-                    onClick={() => {
-                      setEvaluation({
-                        evaluationMarkdown: question.feedback,
-                        recommendedRating: question.srFactor,
-                        appliedRating: question.srFactor,
-                        srs: {
-                          interval: question.srInterval,
-                          repetitions: question.srReps,
-                          easeFactor: question.srFactor,
-                          nextReviewDate: question.srDue
-                        }
-                      });
-                    }}
-                    className="py-4 px-6 bg-zinc-900 border border-white/10 hover:border-white/20 text-zinc-300 hover:text-white font-bold rounded-xl text-center tracking-tight transition-all cursor-pointer"
+                    type="submit"
+                    disabled={isSubmitting || !answerText.trim()}
+                    className="flex-1 glow-btn cursor-pointer py-4 px-6 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/20 text-center tracking-tight transition-all duration-300"
                   >
-                    Cancel
+                    Submit Answer for AI Evaluation
                   </button>
-                )}
+                  
+                  {question.hasAnswer && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEvaluation({
+                          evaluationMarkdown: question.feedback,
+                          recommendedRating: question.srFactor,
+                          appliedRating: question.srFactor,
+                          srs: {
+                            interval: question.srInterval,
+                            repetitions: question.srReps,
+                            easeFactor: question.srFactor,
+                            nextReviewDate: question.srDue
+                          }
+                        });
+                      }}
+                      className="py-4 px-6 bg-zinc-900 border border-white/10 hover:border-white/20 text-zinc-300 hover:text-white font-bold rounded-xl text-center tracking-tight transition-all cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={studyGuide ? () => setShowStudyGuide(true) : handleGenerateStudyGuide}
+                  disabled={isGeneratingGuide}
+                  className="w-full flex items-center justify-center gap-2 py-4 px-6 bg-white/5 border border-white/5 hover:bg-white/10 hover:border-white/10 text-zinc-300 hover:text-white font-bold rounded-xl text-center tracking-tight transition-all cursor-pointer"
+                >
+                  <BookOpen size={15} className="text-purple-400" />
+                  <span>{studyGuide ? "View Stored Study Guide" : "I Don't Know / Study Mode"}</span>
+                </button>
               </div>
             </form>
           )}

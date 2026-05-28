@@ -27,7 +27,9 @@ export async function loadDueQuestions() {
     .where('sr.due', '<=', today)
     .orderBy('sr.due', 'asc')
     .get();
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  return snapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(q => q.archived !== true);
 }
 
 /**
@@ -59,6 +61,7 @@ export async function createQuestion(data) {
     sourceTargetId: data.sourceTargetId || null,
     sourceTopic: data.sourceTopic || null,
     assigned: true, // Custom questions are active immediately
+    archived: false,
     sr: {
       due: now.split('T')[0],
       interval: 1,
@@ -110,6 +113,7 @@ export async function createQuestionsBatch(questionsArray) {
         sourceTargetId: data.sourceTargetId || null,
         sourceTopic: data.sourceTopic || null,
         assigned: isActive,
+        archived: false,
         sr: {
           due: isActive ? now.split('T')[0] : null,
           interval: 1,
@@ -204,6 +208,16 @@ export async function deleteQuestion(questionId) {
     return true;
   }
   return false;
+}
+
+/**
+ * Archive a single question.
+ */
+export async function archiveQuestion(questionId) {
+  await questionsCol().doc(questionId).update({
+    archived: true,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 /**
@@ -458,6 +472,7 @@ function generateTargetId(company, role) {
 export async function activateDailyQuestions(count = 5) {
   const snapshot = await questionsCol()
     .where('assigned', '==', false)
+    .where('archived', '==', false)
     .limit(count)
     .get();
 
@@ -478,4 +493,14 @@ export async function activateDailyQuestions(count = 5) {
 
   await batch.commit();
   return activated;
+}
+
+/**
+ * Save a generated study guide back to a question in Firestore.
+ */
+export async function saveStudyGuide(questionId, studyGuideText) {
+  await questionsCol().doc(questionId).update({
+    studyGuide: studyGuideText,
+    updatedAt: new Date().toISOString(),
+  });
 }

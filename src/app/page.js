@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Sliders, Sparkles, AlertTriangle, Layers, Calendar, CheckSquare, Search, ChevronDown, Check, Loader2, HelpCircle, Target, User, Plus, Compass, Home as HomeIcon } from "lucide-react";
-import { loadQuestionsAction, getConfigAction, loadTargetsAction, deleteQuestionAction } from "./actions";
+import { loadQuestionsAction, getConfigAction, loadTargetsAction, deleteQuestionAction, archiveQuestionAction } from "./actions";
 import SettingsDrawer from "./components/SettingsDrawer";
 import QuestionCard from "./components/QuestionCard";
 import FocusWorkspace from "./components/FocusWorkspace";
@@ -63,7 +63,7 @@ export default function Home() {
 
   // Filter questions dynamically
   useEffect(() => {
-    let result = [...questions];
+    let result = [...questions].filter(q => !q.archived);
 
     if (activeTab === "due") {
       const allDueNew = result.filter(q => q.isDue && !q.hasAnswer);
@@ -114,18 +114,29 @@ export default function Home() {
     }
   }
 
+  async function handleArchiveQuestion(questionId) {
+    if (!confirm("Archive this question? It will be removed from your daily rotation but kept for deduplication.")) return;
+    const result = await archiveQuestionAction(questionId);
+    if (result.success) {
+      showAlert("Question archived.");
+      loadData();
+    } else {
+      showAlert("Error archiving question: " + (result.error || "Unknown error"), "error");
+    }
+  }
+
   function showAlert(message, type = "success") {
     setAlert({ type, message });
     setTimeout(() => setAlert(null), 4000);
   }
 
   // Compute counters
-  const totalCount = questions.length;
-  const answeredCount = questions.filter(q => q.hasAnswer).length;
+  const totalCount = questions.filter(q => !q.archived).length;
+  const answeredCount = questions.filter(q => !q.archived && q.hasAnswer).length;
 
   // Calculate dynamic due count matching our allocation filter
-  const allDueNew = questions.filter(q => q.isDue && !q.hasAnswer);
-  const allDueReviews = questions.filter(q => q.isDue && q.hasAnswer);
+  const allDueNew = questions.filter(q => !q.archived && q.isDue && !q.hasAnswer);
+  const allDueReviews = questions.filter(q => !q.archived && q.isDue && q.hasAnswer);
   
   const visibleReviews = allDueReviews.slice(0, 4);
   const remainingSlots = Math.max(0, 6 - visibleReviews.length);
@@ -444,6 +455,7 @@ export default function Home() {
                   question={q}
                   onClick={setSelectedQuestion}
                   onDelete={handleDeleteQuestion}
+                  onArchive={handleArchiveQuestion}
                 />
               ))}
             </div>
