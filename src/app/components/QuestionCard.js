@@ -1,6 +1,6 @@
 "use client";
 
-import { Calendar, Layers, Trash2, FileText, Target, Sparkles, BookOpen, Archive } from "lucide-react";
+import { Calendar, Layers, Trash2, FileText, Target, Sparkles, BookOpen, Archive, ArchiveRestore } from "lucide-react";
 
 const sourceConfig = {
   "resume-ingestion": { label: "Resume", icon: FileText, color: "bg-purple-500/10 text-purple-400 border-purple-500/20" },
@@ -9,7 +9,7 @@ const sourceConfig = {
   "custom": { label: "Custom", icon: BookOpen, color: "bg-amber-500/10 text-amber-400 border-amber-500/20" },
 };
 
-export default function QuestionCard({ question, onClick, onDelete, onArchive }) {
+export default function QuestionCard({ question, onClick, onDelete, onArchive, onUnarchive }) {
   const {
     title,
     category,
@@ -48,6 +48,11 @@ export default function QuestionCard({ question, onClick, onDelete, onArchive })
   function handleArchive(e) {
     e.stopPropagation();
     if (onArchive) onArchive(question.id);
+  }
+
+  function handleUnarchive(e) {
+    e.stopPropagation();
+    if (onUnarchive) onUnarchive(question.id);
   }
 
   return (
@@ -126,7 +131,15 @@ export default function QuestionCard({ question, onClick, onDelete, onArchive })
             <Calendar size={10} className="text-zinc-600" />
             <span>{srInterval}d</span>
           </div>
-          {onArchive && (
+          {question.archived && onUnarchive ? (
+            <button
+              onClick={handleUnarchive}
+              className="p-1 rounded hover:bg-emerald-500/20 text-zinc-600 hover:text-emerald-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
+              title="Restore / Unarchive question"
+            >
+              <ArchiveRestore size={11} />
+            </button>
+          ) : !question.archived && onArchive ? (
             <button
               onClick={handleArchive}
               className="p-1 rounded hover:bg-amber-500/20 text-zinc-600 hover:text-amber-400 transition-colors cursor-pointer opacity-0 group-hover:opacity-100"
@@ -134,7 +147,7 @@ export default function QuestionCard({ question, onClick, onDelete, onArchive })
             >
               <Archive size={11} />
             </button>
-          )}
+          ) : null}
           {onDelete && (
             <button
               onClick={handleDelete}

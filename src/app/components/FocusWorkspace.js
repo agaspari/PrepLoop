@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award, Mic, Archive } from "lucide-react";
-import { submitAnswerAction, generateStudyGuideAction, archiveQuestionAction } from "../actions";
+import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award, Mic, Archive, ArchiveRestore } from "lucide-react";
+import { submitAnswerAction, generateStudyGuideAction, archiveQuestionAction, unarchiveQuestionAction } from "../actions";
 import FeedbackPanel from "./FeedbackPanel";
 
 export default function FocusWorkspace({ question, onClose, onRefresh }) {
@@ -174,6 +174,16 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
     }
   }
 
+  async function handleUnarchive() {
+    const result = await unarchiveQuestionAction(question.id);
+    if (result.success) {
+      if (onRefresh) onRefresh();
+      onClose();
+    } else {
+      alert("Error restoring question: " + (result.error || "Unknown error"));
+    }
+  }
+
   async function handleGenerateStudyGuide() {
     if (isGeneratingGuide) return;
     setIsGeneratingGuide(true);
@@ -322,15 +332,27 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
             <ArrowLeft size={16} />
             <span>Dashboard</span>
           </button>
-          <button
-            type="button"
-            onClick={handleArchive}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-zinc-400 hover:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 transition-all cursor-pointer"
-            title="Archive question"
-          >
-            <Archive size={16} />
-            <span>Archive</span>
-          </button>
+          {question.archived ? (
+            <button
+              type="button"
+              onClick={handleUnarchive}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 border border-transparent hover:border-emerald-500/20 transition-all cursor-pointer"
+              title="Restore / Unarchive question"
+            >
+              <ArchiveRestore size={16} />
+              <span>Restore</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleArchive}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-zinc-400 hover:text-amber-400 hover:bg-amber-500/10 border border-transparent hover:border-amber-500/20 transition-all cursor-pointer"
+              title="Archive question"
+            >
+              <Archive size={16} />
+              <span>Archive</span>
+            </button>
+          )}
           <div className="h-4 w-px bg-white/10" />
           <div className="flex items-center gap-2">
             <span className="text-xs uppercase font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20">

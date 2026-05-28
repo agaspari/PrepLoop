@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Sliders, Sparkles, AlertTriangle, Layers, Calendar, CheckSquare, Search, ChevronDown, Check, Loader2, HelpCircle, Target, User, Plus, Compass, Home as HomeIcon } from "lucide-react";
-import { loadQuestionsAction, getConfigAction, loadTargetsAction, deleteQuestionAction, archiveQuestionAction } from "./actions";
+import { loadQuestionsAction, getConfigAction, loadTargetsAction, deleteQuestionAction, archiveQuestionAction, unarchiveQuestionAction } from "./actions";
 import SettingsDrawer from "./components/SettingsDrawer";
 import QuestionCard from "./components/QuestionCard";
 import FocusWorkspace from "./components/FocusWorkspace";
@@ -63,23 +63,29 @@ export default function Home() {
 
   // Filter questions dynamically
   useEffect(() => {
-    let result = [...questions].filter(q => !q.archived);
+    let result = [...questions];
 
-    if (activeTab === "due") {
-      const allDueNew = result.filter(q => q.isDue && !q.hasAnswer);
-      const allDueReviews = result.filter(q => q.isDue && q.hasAnswer);
+    if (activeTab === "archived") {
+      result = result.filter(q => q.archived);
+    } else {
+      result = result.filter(q => !q.archived);
+      
+      if (activeTab === "due") {
+        const allDueNew = result.filter(q => q.isDue && !q.hasAnswer);
+        const allDueReviews = result.filter(q => q.isDue && q.hasAnswer);
 
-      // Cap reviews at 4 to prevent study burnout
-      const visibleReviews = allDueReviews.slice(0, 4);
-      // Fill the remaining slots with new questions (at least 2, up to 6 total)
-      const remainingSlots = Math.max(0, 6 - visibleReviews.length);
-      const newCap = Math.max(2, remainingSlots);
-      const visibleNew = allDueNew.slice(0, newCap);
+        // Cap reviews at 4 to prevent study burnout
+        const visibleReviews = allDueReviews.slice(0, 4);
+        // Fill the remaining slots with new questions (at least 2, up to 6 total)
+        const remainingSlots = Math.max(0, 6 - visibleReviews.length);
+        const newCap = Math.max(2, remainingSlots);
+        const visibleNew = allDueNew.slice(0, newCap);
 
-      // Combine and cap at exactly 6 total
-      result = [...visibleReviews, ...visibleNew].slice(0, 6);
-    } else if (activeTab === "answered") {
-      result = result.filter(q => q.hasAnswer);
+        // Combine and cap at exactly 6 total
+        result = [...visibleReviews, ...visibleNew].slice(0, 6);
+      } else if (activeTab === "answered") {
+        result = result.filter(q => q.hasAnswer);
+      }
     }
 
     if (searchQuery.trim()) {
@@ -125,6 +131,16 @@ export default function Home() {
     }
   }
 
+  async function handleUnarchiveQuestion(questionId) {
+    const result = await unarchiveQuestionAction(questionId);
+    if (result.success) {
+      showAlert("Question restored.");
+      loadData();
+    } else {
+      showAlert("Error restoring question: " + (result.error || "Unknown error"), "error");
+    }
+  }
+
   function showAlert(message, type = "success") {
     setAlert({ type, message });
     setTimeout(() => setAlert(null), 4000);
@@ -133,6 +149,7 @@ export default function Home() {
   // Compute counters
   const totalCount = questions.filter(q => !q.archived).length;
   const answeredCount = questions.filter(q => !q.archived && q.hasAnswer).length;
+  const archivedCount = questions.filter(q => q.archived).length;
 
   // Calculate dynamic due count matching our allocation filter
   const allDueNew = questions.filter(q => !q.archived && q.isDue && !q.hasAnswer);
@@ -371,6 +388,16 @@ export default function Home() {
               >
                 All ({totalCount})
               </button>
+              <button
+                onClick={() => setActiveTab("archived")}
+                className={`px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                  activeTab === "archived"
+                    ? "bg-purple-600 text-white shadow-lg shadow-purple-600/10"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                Archived ({archivedCount})
+              </button>
             </div>
 
             {/* Filters */}
@@ -456,6 +483,7 @@ export default function Home() {
                   onClick={setSelectedQuestion}
                   onDelete={handleDeleteQuestion}
                   onArchive={handleArchiveQuestion}
+                  onUnarchive={handleUnarchiveQuestion}
                 />
               ))}
             </div>

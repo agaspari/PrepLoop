@@ -27,6 +27,7 @@ import {
   loadDueQuestions,
   saveStudyGuide,
   archiveQuestion,
+  unarchiveQuestion,
 } from "../lib/cloud-store.js";
 import {
   runResumeIngestion,
@@ -278,6 +279,16 @@ export async function deleteQuestionAction(questionId) {
 /**
  * Archive a question by ID.
  */
+export async function unarchiveQuestionAction(questionId) {
+  try {
+    await unarchiveQuestion(questionId);
+    return { success: true };
+  } catch (error) {
+    console.error("Error unarchiving question:", error);
+    return { success: false, error: error.message };
+  }
+}
+
 export async function archiveQuestionAction(questionId) {
   try {
     await archiveQuestion(questionId);

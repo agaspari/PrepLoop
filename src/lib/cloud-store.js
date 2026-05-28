@@ -213,6 +213,13 @@ export async function deleteQuestion(questionId) {
 /**
  * Archive a single question.
  */
+export async function unarchiveQuestion(questionId) {
+  await questionsCol().doc(questionId).update({
+    archived: false,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 export async function archiveQuestion(questionId) {
   await questionsCol().doc(questionId).update({
     archived: true,
