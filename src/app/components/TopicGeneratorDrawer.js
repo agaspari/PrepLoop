@@ -112,6 +112,7 @@ export default function TopicGeneratorDrawer({ isOpen, onClose, onSaved }) {
     "system-design": "bg-blue-500/15 text-blue-400 border-blue-500/30",
     "conceptual-engineering": "bg-purple-500/15 text-purple-400 border-purple-500/30",
     "behavioral": "bg-amber-500/15 text-amber-400 border-amber-500/30",
+    "systems-internals": "bg-rose-500/15 text-rose-400 border-rose-500/30",
   };
 
   const difficultyColors = {

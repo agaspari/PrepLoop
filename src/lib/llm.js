@@ -19,6 +19,56 @@ function getGeminiClient() {
   return new GoogleGenAI({ apiKey });
 }
 
+// ─── Modular Prompts & Category Instructions Configuration ──────────────────
+
+const CATEGORY_INSTRUCTIONS = {
+  "systems-internals": `
+- Focus on low-level language runtime mechanics (e.g., memory layout, object heap overhead, garbage collection, heap allocations vs primitive values).
+- Focus on physical hardware interaction (e.g., CPU cache spatial locality, temporal cache, pointer-chasing, L1/L2/L3 cache misses).
+- Focus on cross-tier integration hypotheticals: how physical or schemaless database model decisions map down to type-safe code architectures (e.g., Generics vs explicit Type subclasses) and impact serialization bounds at the API payload contract.
+- Relax code rules: You may explicitly prompt for class interfaces, generic type bounds, data structural implementations, and low-level specifications. (Do not require writing complete standalone algorithms, but rather focus on typing and structure).
+  `,
+  "system-design": `
+- Focus on high-level cloud architecture: horizontal scaling, partitioning, load balancers, rate limiting, consistency models, and component integration.
+- Strictly enforce code bans: DO NOT ask for code or pseudocode. Focus on conceptual block diagrams and data flows.
+  `,
+  "conceptual-engineering": `
+- Focus on deep conceptual and trade-off comparison between frameworks, languages, protocols, databases, or systems tools (e.g. SQL vs NoSQL, Kafka vs RabbitMQ).
+- Strictly enforce code bans: DO NOT ask for code or pseudocode.
+  `,
+  "behavioral": `
+- Focus on the candidate's professional achievements, measuring outcomes, managing conflicts, resolving technical debt, leadership, and time pressure.
+  `
+};
+
+// Exemplary Systems Internals Reference Context (integrated CTC Notes & FAANG benchmarks)
+const SYSTEMS_INTERNALS_FEW_SHOT_GUIDES = `
+EXAMPLE 1: The Heterogeneous Serialization & Database Mapping Hypothetical
+- Background Context: A schemaless NoSQL weather metrics store containing windspeed (double), status (string), etc., where fields can be missing/incomplete.
+- Target Deep Probe: Designing the intermediate Java API model to map these dynamically typed fields safely to the client. Contrast using Java Generics \`DatabaseValue<T>\` vs explicit concrete wrappers (\`DoubleValue\`, \`StringValue\`). Detail how this choice impacts JSON serialization overhead and type safety guarantees at the API payload contract boundary.
+
+EXAMPLE 2: Standard Library Layout & Spatial Locality (Memory & Cache)
+- Background Context: Building a high-performance in-memory cache using a HashMap.
+- Target Deep Probe: Contrast the CPU cache locality (L1/L2 cache lines) of a continuous primitive array vs a linked node structure (like Java HashMap buckets before colliding list transitions to red-black trees). Explain how pointer chasing affects temporal and spatial cache misses, and discuss compiler Garbage Collection pressure under high frequency eviction rates.
+
+EXAMPLE 3: Page Allocation & Disk Block Index Alignment (Database Internals)
+- Background Context: Optimizing high-throughput indexing in storage repositories.
+- Target Deep Probe: Compare B-Tree page allocation size alignment with physical disk sectors vs Log-Structured Merge (LSM) tree sequential write compaction algorithms. Analyze how B-Tree random index page splits affect write amplification and cache-locality in memory buffers.
+`;
+
+function compileCategoryRules(categories) {
+  let output = "\nCATEGORY SPECIFIC RULES & CONSTRAINTS:\n";
+  categories.forEach(cat => {
+    if (CATEGORY_INSTRUCTIONS[cat]) {
+      output += `\n--- Category: ${cat.toUpperCase()} ---\n${CATEGORY_INSTRUCTIONS[cat].trim()}\n`;
+      if (cat === "systems-internals") {
+        output += `\nFEW-SHOT GUIDES & EXAMPLES FOR INSPIRATION:\n${SYSTEMS_INTERNALS_FEW_SHOT_GUIDES.trim()}\n`;
+      }
+    }
+  });
+  return output;
+}
+
 // ─── Resume Context Helpers ─────────────────────────────────────────────────
 
 /**
@@ -159,17 +209,18 @@ Technologies: ${fact.tech.join(', ')}
 Themes: ${fact.themes.join(', ')}
 
 Generate exactly 4 to 5 interview questions about THIS fact. Requirements:
-- Include at least one from each: system-design or conceptual-engineering, and behavioral
+- Mix categories: include at least one from behavioral, and others across system-design, systems-internals, or conceptual-engineering
 - At least one "easy" warm-up, at least one "hard" deep-dive
 - Ask about trade-offs, failure modes, alternatives considered, scaling limits, design decisions
 - For behavioral: challenge stated outcomes — how measured, who pushed back, what failed
-- DO NOT ask for code or pseudocode
+
+${compileCategoryRules(["systems-internals", "system-design", "conceptual-engineering", "behavioral"])}
 
 Return ONLY a JSON array. Each object:
 {
   "title": "short specific title (≤ 12 words)",
   "question": "full question text anchored to this fact",
-  "category": "system-design" | "conceptual-engineering" | "behavioral",
+  "category": "system-design" | "conceptual-engineering" | "behavioral" | "systems-internals",
   "subCategories": ["tag1", "tag2"],
   "difficulty": "easy" | "medium" | "hard",
   "resumeContext": "1-2 sentences naming the specific fact and why this question matters"
@@ -203,16 +254,18 @@ ${fullResumeContext}
 SKILL CLUSTER: ${cluster.category}
 Skills in cluster: ${skillNames}
 
-Generate exactly 3 conceptual or system-design questions that test deep understanding of these technologies.
+Generate exactly 3 deep conceptual, systems-internals, or system-design questions that test deep understanding of these technologies.
 - Focus on trade-offs between tools in this cluster, when to use what, architectural implications
 - At least one should be "easy" (explain a core concept), one "medium" or "hard" (design decision or trade-off)
 - Anchor to the candidate's real usage where possible
+
+${compileCategoryRules(["systems-internals", "system-design", "conceptual-engineering"])}
 
 Return ONLY a JSON array. Each object:
 {
   "title": "short specific title (≤ 12 words)",
   "question": "full question text",
-  "category": "conceptual-engineering" | "system-design",
+  "category": "conceptual-engineering" | "system-design" | "systems-internals",
   "subCategories": ["tag1", "tag2"],
   "difficulty": "easy" | "medium" | "hard",
   "resumeContext": "1-2 sentences connecting to candidate's experience with these skills"
@@ -274,23 +327,24 @@ export async function generateSystemDesignQuestions(fullResumeContext) {
   const ai = getGeminiClient();
 
   const prompt = `
-You are a senior interviewer creating system design questions that combine MULTIPLE aspects of a candidate's experience.
+You are a senior interviewer creating system design and systems-internals questions that combine MULTIPLE aspects of a candidate's experience.
 
 CANDIDATE CONTEXT:
 ${fullResumeContext}
 
-Generate exactly 15 system design questions. Requirements:
+Generate exactly 15 system design and systems-internals questions. Requirements:
 - Each question should combine knowledge from at least 2 different projects or skill areas
-- Ask about designing systems at scale, making architectural decisions, handling failure modes
+- Ask about designing systems at scale, making architectural decisions, handling failure modes, or drilling down into runtime structures and data mapping boundaries
 - Include data modeling, API design, caching, consistency, observability themes
 - Mix difficulties: 3 easy, 7 medium, 5 hard
-- Don't ask for code — ask for architecture, component design, trade-offs
+
+${compileCategoryRules(["systems-internals", "system-design"])}
 
 Return ONLY a JSON array. Each object:
 {
   "title": "short specific title (≤ 12 words)",
   "question": "full question text combining multiple experience areas",
-  "category": "system-design",
+  "category": "system-design" | "systems-internals",
   "subCategories": ["tag1", "tag2"],
   "difficulty": "easy" | "medium" | "hard",
   "resumeContext": "1-2 sentences naming the specific facts/projects combined"
@@ -412,18 +466,19 @@ ${dedupBlock}
 
 Generate 25 to 35 interview questions that a candidate would realistically face for this specific role at this company. Requirements:
 - Use your knowledge of ${target.company}'s interview process, engineering culture, and technical stack
-- Mix categories: ~10 system-design, ~15 conceptual-engineering, ~10 behavioral
+- Mix categories: ~8 system-design, ~8 systems-internals, ~10 conceptual-engineering, ~8 behavioral
 - Mix difficulties: ~8 easy, ~15 medium, ~12 hard
 - Anchor questions to the intersection of the candidate's experience and the target role
 - For technical questions: focus on the tech stack mentioned in the JD
 - For behavioral: align with the company's known cultural values and leadership principles
-- Ask about trade-offs, design decisions, failure modes, scaling — NOT pseudocode
+
+${compileCategoryRules(["systems-internals", "system-design", "conceptual-engineering", "behavioral"])}
 
 Return ONLY a JSON array. Each object:
 {
   "title": "short specific title (≤ 12 words)",
   "question": "full question text",
-  "category": "system-design" | "conceptual-engineering" | "behavioral",
+  "category": "system-design" | "conceptual-engineering" | "behavioral" | "systems-internals",
   "subCategories": ["tag1", "tag2"],
   "difficulty": "easy" | "medium" | "hard",
   "resumeContext": "A brief explanation containing two clear parts: 1) 'Resume Connection' (how this connects to the candidate's experience), and 2) 'Target Relevance' (why this is highly relevant to this specific role and company, e.g., at ${target.company || target.title})."
@@ -483,16 +538,17 @@ ${dedupBlock}
 
 Generate exactly 8 interview questions focused on "${topic}". Requirements:
 - Deep technical coverage of ${topic}: fundamentals, trade-offs, design patterns, failure modes, real-world applications
-- Mix categories: at least 2 system-design, at least 3 conceptual-engineering, at least 1 behavioral
+- Mix categories: at least 2 system-design, at least 2 systems-internals, at least 2 conceptual-engineering, at least 1 behavioral
 - Mix difficulties: 2 easy, 3 medium, 3 hard
 - If candidate context is provided, anchor questions to their real experience where natural
-- Ask about trade-offs, edge cases, alternatives, scaling limits — NOT pseudocode
+
+${compileCategoryRules(["systems-internals", "system-design", "conceptual-engineering", "behavioral"])}
 
 Return ONLY a JSON array. Each object:
 {
   "title": "short specific title (≤ 12 words)",
   "question": "full question text",
-  "category": "system-design" | "conceptual-engineering" | "behavioral",
+  "category": "system-design" | "conceptual-engineering" | "behavioral" | "systems-internals",
   "subCategories": ["tag1", "tag2"],
   "difficulty": "easy" | "medium" | "hard",
   "resumeContext": "1-2 sentences explaining why this question matters for the topic"
@@ -519,8 +575,16 @@ Return ONLY a JSON array. Each object:
  * Grade and evaluate the candidate's long-form answer.
  * Unchanged from original — this works well as-is.
  */
-export async function evaluateAnswer(questionTitle, questionText, resumeContext, userAnswer) {
+export async function evaluateAnswer(questionTitle, questionText, resumeContext, userAnswer, questionCategory = null) {
   const ai = getGeminiClient();
+
+  const categoryRigorPrompt = questionCategory === "systems-internals" 
+    ? `
+### CRITICAL EVALUATION RULES FOR SYSTEMS INTERNALS:
+- Calibrate expectations to deep runtime mechanics, memory alignment, pointer chasing, serialization overheads, spatial/temporal cache line hits/misses, and type safety constraints.
+- Grade with elite FAANG/systems engineering rigor. Look for concrete mentions of memory layouts, collection overheads, pointer spatial locality, block allocation details, and explicit interface type parameters (e.g. Java Generics vs explicit wrappers). Do not give high marks for hand-waving or vague structural answers.
+    `
+    : "";
 
   const prompt = `
 You are a senior interviewer evaluating a candidate's long-form answer. Grade rigorously but fairly, calibrated to the apparent difficulty of the question — not every question deserves FAANG-tier expectations.
@@ -532,6 +596,8 @@ Resume context that motivated this question: ${resumeContext}
 
 ### CANDIDATE'S ANSWER
 ${userAnswer ? userAnswer : '(No answer was submitted.)'}
+
+${categoryRigorPrompt}
 
 ### YOUR EVALUATION
 Return clean Markdown with these sections in order. If no answer was submitted, give 0/100, skip sections 2 and 3, still provide section 4, and set the SM-2 rating to 0.

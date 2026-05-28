@@ -28,6 +28,7 @@ export default function QuestionCard({ question, onClick, onDelete, onArchive, o
     "system-design": { label: "System Design", style: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20" },
     "conceptual-engineering": { label: "Conceptual", style: "bg-indigo-500/10 text-indigo-300 border-indigo-500/20" },
     "behavioral": { label: "Behavioral", style: "bg-amber-500/10 text-amber-300 border-amber-500/20" },
+    "systems-internals": { label: "Systems & Internals", style: "bg-rose-500/10 text-rose-300 border-rose-500/20" },
   };
 
   const difficultyStyles = {

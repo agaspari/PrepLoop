@@ -441,6 +441,7 @@ export default function Home() {
                   <option value="all" className="bg-zinc-900 text-zinc-300">All Categories</option>
                   <option value="system-design" className="bg-zinc-900 text-zinc-300">System Design</option>
                   <option value="conceptual-engineering" className="bg-zinc-900 text-zinc-300">Conceptual</option>
+                  <option value="systems-internals" className="bg-zinc-900 text-zinc-300">Systems & Internals</option>
                   <option value="behavioral" className="bg-zinc-900 text-zinc-300">Behavioral</option>
                 </select>
                 <ChevronDown size={12} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />

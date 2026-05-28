@@ -189,7 +189,8 @@ export async function submitAnswerAction(questionId, answerText, userRatingOverr
       q.title,
       q.question || q.title,
       q.resumeContext || "",
-      answerText
+      answerText,
+      q.category
     );
 
     // Determine rating

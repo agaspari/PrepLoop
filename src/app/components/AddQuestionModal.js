@@ -72,6 +72,7 @@ export default function AddQuestionModal({ isOpen, onClose, onCreated }) {
   const categories = [
     { value: "system-design", label: "System Design", color: "text-blue-400" },
     { value: "conceptual-engineering", label: "Conceptual Engineering", color: "text-purple-400" },
+    { value: "systems-internals", label: "Systems & Internals", color: "text-rose-400" },
     { value: "behavioral", label: "Behavioral", color: "text-amber-400" },
   ];
 

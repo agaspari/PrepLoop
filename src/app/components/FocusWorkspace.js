@@ -5,6 +5,13 @@ import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar,
 import { submitAnswerAction, generateStudyGuideAction, archiveQuestionAction, unarchiveQuestionAction } from "../actions";
 import FeedbackPanel from "./FeedbackPanel";
 
+const categoryStyles = {
+  "system-design": "bg-emerald-500/10 text-emerald-300 border-emerald-500/20",
+  "conceptual-engineering": "bg-indigo-500/10 text-indigo-300 border-indigo-500/20",
+  "behavioral": "bg-amber-500/10 text-amber-300 border-amber-500/20",
+  "systems-internals": "bg-rose-500/10 text-rose-300 border-rose-500/20",
+};
+
 export default function FocusWorkspace({ question, onClose, onRefresh }) {
   const [answerText, setAnswerText] = useState(question.answer || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -355,7 +362,7 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
           )}
           <div className="h-4 w-px bg-white/10" />
           <div className="flex items-center gap-2">
-            <span className="text-xs uppercase font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20">
+            <span className={`text-xs uppercase font-mono px-2 py-0.5 rounded border ${categoryStyles[question.category] || "bg-purple-500/10 text-purple-300 border-purple-500/20"}`}>
               {question.category.replace("-", " ")}
             </span>
             <span className="text-xs uppercase font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
