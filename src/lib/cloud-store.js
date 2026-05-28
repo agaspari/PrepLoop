@@ -148,11 +148,15 @@ export async function saveAnswerAndEvaluation(questionId, answerText, evaluation
   };
 
   if (srsData) {
+    const reps = srsData.reps !== undefined 
+      ? srsData.reps 
+      : (srsData.repetitions !== undefined ? srsData.repetitions : srsData['sr-reps']);
+
     updateData.sr = {
-      due: srsData['sr-due'] || srsData.due || srsData.nextReviewDate,
-      interval: srsData['sr-interval'] || srsData.interval,
-      factor: srsData['sr-factor'] || srsData.factor || srsData.easeFactor,
-      reps: srsData['sr-reps'] || srsData.reps || srsData.repetitions,
+      due: srsData.due || srsData.nextReviewDate || srsData['sr-due'],
+      interval: srsData.interval || srsData['sr-interval'] || 1,
+      factor: srsData.factor || srsData.easeFactor || srsData['sr-factor'] || 2.5,
+      reps: reps !== undefined ? reps : 0,
     };
   }
 
