@@ -48,6 +48,9 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
 
   // Load existing evaluation if already answered
   useEffect(() => {
+    setStudyGuide(question.studyGuide || null);
+    setShowStudyGuide(false);
+
     if (question.hasAnswer) {
       setEvaluation({
         evaluationMarkdown: question.feedback,

@@ -152,6 +152,7 @@ export async function loadQuestionsAction() {
         resumeContext: q.resumeContext || "",
         answer: q.answer || "",
         feedback: q.feedback || "",
+        studyGuide: q.studyGuide || null,
         source: q.source || "custom",
         sourceTargetId: q.sourceTargetId || null,
         sourceTopic: q.sourceTopic || null,
