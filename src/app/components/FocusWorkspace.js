@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award } from "lucide-react";
+import { ArrowLeft, BookOpen, AlertCircle, Sparkles, Loader2, History, Calendar, ChevronDown, ChevronUp, Award, Mic } from "lucide-react";
 import { submitAnswerAction } from "../actions";
 import FeedbackPanel from "./FeedbackPanel";
 
@@ -12,6 +12,8 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
   const [loadingTip, setLoadingTip] = useState("Analyzing your trade-offs...");
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [expandedAttemptIdx, setExpandedAttemptIdx] = useState(null);
+  const [isListening, setIsListening] = useState(false);
+  const [recognition, setRecognition] = useState(null);
 
   // Loading quotes to cycle through for rich aesthetics
   const loadingTips = [
@@ -52,6 +54,71 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
       setEvaluation(null);
     }
   }, [question]);
+
+  // Cleanup speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognition) {
+        recognition.stop();
+      }
+    };
+  }, [recognition]);
+
+  function toggleListening() {
+    if (isListening) {
+      if (recognition) {
+        recognition.stop();
+      }
+      setIsListening(false);
+    } else {
+      const SpeechRecognition = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+      if (!SpeechRecognition) {
+        alert("Speech recognition is not supported in this browser. Please try Chrome, Edge, or Safari!");
+        return;
+      }
+
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+
+      rec.onstart = () => {
+        setIsListening(true);
+      };
+
+      rec.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        setIsListening(false);
+      };
+
+      rec.onend = () => {
+        setIsListening(false);
+      };
+
+      rec.onresult = (event) => {
+        let interimTranscript = "";
+        let finalTranscript = "";
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+
+        if (finalTranscript) {
+          setAnswerText((prev) => {
+            const needsSpace = prev.length > 0 && !prev.endsWith(" ");
+            return prev + (needsSpace ? " " : "") + finalTranscript;
+          });
+        }
+      };
+
+      rec.start();
+      setRecognition(rec);
+    }
+  }
 
   const wordCount = answerText.trim() ? answerText.trim().split(/\s+/).length : 0;
   const charCount = answerText.length;
@@ -270,8 +337,23 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
           ) : (
             <form onSubmit={handleSubmit} className="flex-1 flex flex-col p-8 space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-white tracking-tight">Your Long-Form Solution</h2>
-                <div className="flex gap-4 text-xs font-mono text-zinc-500">
+                <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-3">
+                  Your Long-Form Solution
+                </h2>
+                <div className="flex items-center gap-4 text-xs font-mono text-zinc-500">
+                  <button
+                    type="button"
+                    onClick={toggleListening}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all ${
+                      isListening
+                        ? "bg-rose-500/25 border-rose-500 text-rose-300 animate-pulse shadow-lg shadow-rose-500/20"
+                        : "bg-white/5 border-white/5 text-zinc-400 hover:text-white hover:bg-white/10 hover:border-white/10"
+                    }`}
+                    title={isListening ? "Stop listening" : "Start speaking to dictate solution"}
+                  >
+                    <Mic size={13} className={isListening ? "text-rose-400 animate-bounce" : "text-zinc-400"} />
+                    <span>{isListening ? "Listening..." : "Dictate"}</span>
+                  </button>
                   <span>Words: {wordCount}</span>
                   <span>Chars: {charCount}</span>
                 </div>
@@ -285,13 +367,37 @@ export default function FocusWorkspace({ question, onClose, onRefresh }) {
                 required
               />
 
-              <button
-                type="submit"
-                disabled={isSubmitting || !answerText.trim()}
-                className="glow-btn cursor-pointer py-4 px-6 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/20 text-center tracking-tight transition-all duration-300"
-              >
-                Submit Answer for AI Evaluation
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !answerText.trim()}
+                  className="flex-1 glow-btn cursor-pointer py-4 px-6 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl shadow-lg shadow-purple-600/20 text-center tracking-tight transition-all duration-300"
+                >
+                  Submit Answer for AI Evaluation
+                </button>
+                
+                {question.hasAnswer && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEvaluation({
+                        evaluationMarkdown: question.feedback,
+                        recommendedRating: question.srFactor,
+                        appliedRating: question.srFactor,
+                        srs: {
+                          interval: question.srInterval,
+                          repetitions: question.srReps,
+                          easeFactor: question.srFactor,
+                          nextReviewDate: question.srDue
+                        }
+                      });
+                    }}
+                    className="py-4 px-6 bg-zinc-900 border border-white/10 hover:border-white/20 text-zinc-300 hover:text-white font-bold rounded-xl text-center tracking-tight transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             </form>
           )}
 
